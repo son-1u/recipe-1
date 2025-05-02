@@ -1,4 +1,3 @@
-
 --[[
 The base class of the chassis. It works in a module system allowing you to add extra components to the mechanics
 for different type of cars.
@@ -44,10 +43,10 @@ type Config = {
 	},
 }
 
-local Engine = {} :: Engine
+local Engine = {}
 Engine.__index = Engine
 
-type Engine = typeof(setmetatable({} :: {
+type Engine = {
 	_vehicle: Vehicle,
 	_rpm: number,
 	_minRPM: number,
@@ -55,15 +54,14 @@ type Engine = typeof(setmetatable({} :: {
 	_horsepower: number,
 	_health: number,
 	_maxTorque: number,
-}, {} :: {
-	new: (vehicle: Vehicle, config: Config.engine) -> Engine,
 
+	new: (vehicle: Vehicle, config: Config.engine) -> Engine,
 	getTorque: (self: Engine) -> number,
 	getRPM: (self: Engine) -> number,
 	getHealth: (self: Engine) -> number,
 	changeHealth: (self: Engine, amount: number) -> (),
 	update: (self: Engine, throttle: number, dt: number) -> number,
-}))
+}
 
 local function lerp(a: number, b: number, t: number): number
 	return a + (b - a) * t
@@ -126,10 +124,10 @@ end
 
 ---------------------------GENERATOR CLASS----------------------------
 
-local Generator = {} :: Generator
+local Generator = {}
 Generator.__index = Generator
 
-type Generator = typeof(setmetatable({} :: {
+type Generator = {
 	_vehicle: Vehicle,
 	_active: boolean,
 	_energyStored: number,
@@ -138,14 +136,13 @@ type Generator = typeof(setmetatable({} :: {
 	_dischargeRate: number,
 	_output: number,
 	_health: number,
-}, {} :: {
-	new: (vehicle: Vehicle, config: Config.generator) -> Generator,
 
+	new: (vehicle: Vehicle, config: Config.generator) -> Generator,
 	activate: (self: Generator, value: boolean) -> (),
 	isActive: (self: Generator) -> boolean,
 	getHealth: (self: Generator) -> number,
 	changeHealth: (self: Generator, amount: number) -> (),
-}))
+}
 
 function Generator.new(vehicle: Vehicle, config: Config.generator): Generator
 	local self = setmetatable({}, Generator) :: Generator
@@ -179,23 +176,22 @@ end
 
 --------------------------TURBOCHARGER CLASS--------------------------
 
-local Turbocharger = {} :: Turbocharger
+local Turbocharger = {}
 Turbocharger.__index = Turbocharger
 
-type Turbocharger = typeof(setmetatable({} :: {
+type Turbocharger = {
 	_vehicle: Vehicle,
 	_active: boolean,
 	_boost: number,
 	_health: number,
-}, {} :: {
-	new: (vehicle: Vehicle) -> Turbocharger,
 
+	new: (vehicle: Vehicle) -> Turbocharger,
 	activate: (self: Turbocharger, value: boolean) -> (),
 	isActive: (self: Turbocharger) -> boolean,
 	getBoost: (self: Turbocharger) -> number,
 	getHealth: (self: Turbocharger) -> number,
-	changeHealth: (self: Turbocharger, amount: number) -> ()
-}))
+	changeHealth: (self: Turbocharger, amount: number) -> (),
+}
 
 function Turbocharger.new(vehicle: Vehicle): Turbocharger
 	local self = setmetatable({}, Turbocharger) :: Turbocharger
@@ -229,10 +225,10 @@ end
 
 -----------------------------GEARBOX CLASS----------------------------
 
-local Gearbox = {} :: Gearbox
+local Gearbox = {}
 Gearbox.__index = Gearbox
 
-type Gearbox = typeof(setmetatable({} :: {
+type Gearbox = {
 	_vehicle: Vehicle,
 	_gear: number,
 	_gearRatios: {number},
@@ -240,9 +236,8 @@ type Gearbox = typeof(setmetatable({} :: {
 	_transmission: number,
 	_maxGearRPMs: {number},
 	_health: number,
-}, {} :: {
-	new: (vehicle: Vehicle, config: Config.gearbox) -> Gearbox,
 
+	new: (vehicle: Vehicle, config: Config.gearbox) -> Gearbox,
 	shiftUp: (self: Gearbox) -> (),
 	shiftDown: (self: Gearbox) -> (),
 	getGear: (self: Gearbox) -> number,
@@ -251,7 +246,7 @@ type Gearbox = typeof(setmetatable({} :: {
 	getHealth: (self: Gearbox) -> number,
 	changeHealth: (self: Gearbox, amount: number) -> (),
 	update: (self: Gearbox, dt: number) -> (),
-}))
+}
 
 function Gearbox.new(vehicle: Vehicle, config: Config.gearbox): Gearbox
 	local self = setmetatable({}, Gearbox) :: Gearbox
@@ -313,19 +308,18 @@ end
 
 ------------------------------AXLE CLASS------------------------------
 
-local Axle = {} :: Axle
+local Axle = {}
 Axle.__index = Axle
 
-type Axle = typeof(setmetatable({} :: {
+type Axle = {
 	_vehicle: Vehicle,
 	_axleType: number,
 	_health: number,
-}, {} :: {
-	new: (vehicle: Vehicle, axleType: Enums.AxleType) -> Axle,
 
+	new: (vehicle: Vehicle, axleType: Enums.AxleType) -> Axle,
 	getHealth: (self: Axle) -> number,
 	changeHealth: (self: Axle, amount: number) -> (),
-}))
+}
 
 function Axle.new(vehicle: Vehicle, axleType: Enums.AxleType): Axle
 	local self = setmetatable({}, Axle) :: Axle
@@ -346,19 +340,20 @@ end
 
 ------------------------STEERING COLUMN CLASS-------------------------
 
-local SteeringColumn = {} :: SteeringColumn
+local SteeringColumn = {}
 SteeringColumn.__index = SteeringColumn
 
-type SteeringColumn = typeof(setmetatable({} :: {
-	_steeringAngle: number,
-	_health: number,
-}, {} :: {
-	new: (vehicle: Vehicle, config: Config.steeringAngle) -> SteeringColumn,
 
+type SteeringColumn = {
+	_steeringAngle: number,
+	_maxSteeringAngle: number,
+	_health: number,
+
+	new: (vehicle: Vehicle, config: Config.steeringAngle) -> SteeringColumn,
 	getHealth: (self: SteeringColumn) -> number,
 	changeHealth: (self: SteeringColumn, amount: number) -> (),
 	update: (self: SteeringColumn, steerFloat: number, dt: number) -> number,
-}))
+}
 
 function SteeringColumn.new(vehicle: Vehicle, config: Config.steeringAngle): SteeringColumn
 	local self = setmetatable({}, SteeringColumn) :: SteeringColumn
@@ -381,17 +376,17 @@ function SteeringColumn:update(steerFloat: number, dt: number): number
 		return 0
 	end
 
-	local newAngle = lerp(self._steeringAngle, steerFloat, self._health / 100)
+	local newAngle = (steerFloat * self._maxSteeringAngle) - self._steeringAngle --lerp(self._steeringAngle, steerFloat, self._health / 100)
 	self._steeringAngle = newAngle
 	return newAngle
 end
 
 -----------------------------WHEEL CLASS------------------------------
 
-local Wheel = {} :: Wheel
+local Wheel = {}
 Wheel.__index = Wheel
 
-type Wheel = typeof(setmetatable({} :: {
+type Wheel = {
 	_vehicle: Vehicle,
 	_wheel: BasePart,
 	_tireCompound: number,
@@ -400,9 +395,8 @@ type Wheel = typeof(setmetatable({} :: {
 	_stress: number,
 	_powered: boolean,
 	_health: number,
-}, {} :: {
+
 	new: (vehicle: Vehicle, wheel: BasePart, powered: boolean, config: Config.wheel) -> Wheel,
-	
 	getTraction: (self: Wheel) -> number,
 	updateTraction: (self: Wheel, traction: number) -> (),
 	changeCompound: (self: Wheel, compound: Enums.TireCompound) -> (),
@@ -410,7 +404,7 @@ type Wheel = typeof(setmetatable({} :: {
 	getHealth: (self: Wheel) -> number,
 	changeHealth: (self: Wheel, amount: number) -> (),
 	update: (self: Wheel, dt: number) -> {number},
-}))
+}
 
 function Wheel.new(vehicle: Vehicle, wheel: BasePart, powered: boolean, config: Config.wheel): Wheel
 	local self = setmetatable({}, Wheel) :: Wheel
@@ -468,10 +462,10 @@ end
 
 ------------------------------MAIN CLASS------------------------------
 
-local Vehicle = {} :: Vehicle
+local Vehicle = {}
 Vehicle.__index = Vehicle
 
-type Vehicle = typeof(setmetatable({} :: {
+type Vehicle = {
 	engine: Engine,
 	generator: Generator?,
 	turbocharger: Turbocharger?,
@@ -480,16 +474,15 @@ type Vehicle = typeof(setmetatable({} :: {
 	rearAxle: Axle,
 	steeringColumn: SteeringColumn,
 	wheels: {Wheel},
-	_chassis: BasePart
-}, {} :: {
-	new: (wheels: {BasePart}, config: Config) -> Vehicle,
-	
+	_chassis: BasePart,
+
+	new: (wheels: {[string]: BasePart}, config: Config) -> Vehicle,
 	getCurrentSpeed: (self: Vehicle) -> number,
 	isFlipped: (self: Vehicle) -> boolean,
 	update: (self: Vehicle, values: {number}, dt: number) -> {any},
-}))
+}
 
-function Vehicle.new(wheels: {BasePart}, config: Config): Vehicle
+function Vehicle.new(wheels: {[string]: BasePart}, config: Config): Vehicle
 	local self = setmetatable({}, Vehicle) :: Vehicle
 	self.engine = Engine.new(self, config.engine)
 	self.generator = config.components.generator and Generator.new(self, config.generator) or nil
@@ -505,27 +498,8 @@ function Vehicle.new(wheels: {BasePart}, config: Config): Vehicle
 		RR = Wheel.new(self, wheels.RR, true, config.wheel),
 	}
 	self._chassis = config.chassis
-
 	return self
 end
-
---[[
-function updateThrottle(self, dt: number): ()
-
-end
-
-function updateEngineRPM(self): ()
-
-end
-
-function updateTorque(self): ()
-	local torque = math.min(self:getCurrentSpeed(), self._gearMaxSpeed) / self._gearMaxSpeed
-end
-
-function updateSteering(self): ()
-
-end
-]]
 
 function Vehicle:getCurrentSpeed(): number
 	return self._chassis.AssemblyLinearVelocity.Magnitude
@@ -538,11 +512,13 @@ function Vehicle:isFlipped(): boolean
 end
 
 function Vehicle:update(values: {throttle: number, steer: number}, dt: number): {any}
+	
 	return {
-
+	angularVelocity = self.engine:update(),
+	motorMaxTorque = self.gearbox:update(), --  FINISH THIS
+	newSteeringAngle = self.steeringColumn:update(),
+	
 	}
 end
 
 return Vehicle
-
--- NOTE TO SELF: SOME THINGS (LIKE STEERINGCOLUMN) IS NOT AFFECTED BY FRAMERATE (DELTATIME), PLEASE EDIT IT SO IT IS
