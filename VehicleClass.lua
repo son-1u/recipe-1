@@ -60,7 +60,7 @@ type Engine = {
 	getRPM: (self: Engine) -> number,
 	getHealth: (self: Engine) -> number,
 	changeHealth: (self: Engine, amount: number) -> (),
-	update: (self: Engine, throttle: number, dt: number) -> number,
+	update: (self: Engine, throttle: number, engineBoost: number?, dt: number) -> number, number,
 }
 
 local function lerp(a: number, b: number, t: number): number
@@ -96,18 +96,11 @@ function Engine:changeHealth(amount: number): ()
 	self._health += amount
 end
 
-function Engine:update(throttle: number, dt: number): number
+function Engine:update(throttle: number, engineBoost, number?, dt: number): number, number
 	self._rpm = (self._vehicle:getCurrentSpeed()
 		* self._vehicle.gearbox:getGearRatio(self._vehicle.gearbox:getGear())
 		* 336) / self._vehicle.wheels[1]:getTireSize()
 	self._rpm = math.clamp(self._rpm, self._minRPM, self._maxRPM)
-	
-	if self._vehicle.generator:isActive() then
-		
-	end
-	if self._vehicle.turbocharger:isActive() then
-		
-	end
 	
 	if self._health <= 0 then
 		return self._rpm
@@ -119,7 +112,7 @@ function Engine:update(throttle: number, dt: number): number
 		
 	end
 	
-	return self._rpm
+	return self._rpm, (self._horsepower * 5252) / self._rpm
 end
 
 ---------------------------GENERATOR CLASS----------------------------
@@ -172,6 +165,18 @@ end
 
 function Generator:changeHealth(amount: number): ()
 	self._health += amount
+end
+
+function Generator:update(dt: number): number
+	if self:isActive() then
+		local discharge = math.min(self._energyStored, self._dischargeRate)
+		self._output = discharge
+		self._energyStored -= discharge
+	else
+		self._output = 0 -- take in brake power and charge. chargeRate * dt * throttleFloat?
+	end
+
+	return self._output
 end
 
 --------------------------TURBOCHARGER CLASS--------------------------
@@ -241,11 +246,10 @@ type Gearbox = {
 	shiftUp: (self: Gearbox) -> (),
 	shiftDown: (self: Gearbox) -> (),
 	getGear: (self: Gearbox) -> number,
-	getGearRatio: (self: Gearbox, gear: number) -> number,
 	getTorque: (self: Gearbox) -> number,
 	getHealth: (self: Gearbox) -> number,
 	changeHealth: (self: Gearbox, amount: number) -> (),
-	update: (self: Gearbox, dt: number) -> (),
+	update: (self: Gearbox, engineRPM: number, engineTorque: number) -> number, number,
 }
 
 function Gearbox.new(vehicle: Vehicle, config: Config.gearbox): Gearbox
@@ -285,13 +289,9 @@ function Gearbox:getGear(): number
 	return self._gear
 end
 
-function Gearbox:getGearRatio(gear: number): number
-	return self._gearRatios[gear]
-end
-
 -- Input engine torque
 function Gearbox:getTorque(torque: number): number
-	return torque * self._gearRatios[self._gear]
+	return torque * self._gearRatios[self._gear] -- Isn't this the formula for calculating gearbox rpm?, need to come back to this
 end
 
 function Gearbox:getHealth(): number
@@ -302,8 +302,8 @@ function Gearbox:changeHealth(amount: number): ()
 	self._health += amount
 end
 
-function Gearbox:update(dt: number): number
-	
+function Gearbox:update(engineRPM: number, engineTorque: number): number, number
+	return engineRPM * self._gearRatios[self._gear]
 end
 
 ------------------------------AXLE CLASS------------------------------
@@ -399,7 +399,7 @@ type Wheel = {
 	new: (vehicle: Vehicle, wheel: BasePart, powered: boolean, config: Config.wheel) -> Wheel,
 	getTraction: (self: Wheel) -> number,
 	updateTraction: (self: Wheel, traction: number) -> (),
-	changeCompound: (self: Wheel, compound: Enums.TireCompound) -> (),
+	changeWheel: (self: Wheel, compound: Enums.TireCompound) -> (),
 	getTireSize: (self: Wheel) -> number,
 	getHealth: (self: Wheel) -> number,
 	changeHealth: (self: Wheel, amount: number) -> (),
@@ -428,8 +428,14 @@ function Wheel:updateTraction(traction: number): ()
 	self._traction = traction
 end
 
-function Wheel:changeCompound(compound: Enums.TireCompound)
-
+function Wheel:changeWheel(compound: Enums.TireCompound)
+	self._tireCompound = compound
+	self._traction = 0 -- TODO: replace with a dictionary lookup of default tractions?
+	self._health = 100
+	self._stress = 0
+	self._temperature = 15 -- We could probably get the temperature from whatever weather control system nate has, convert to C
+	
+	-- I guess I should update the tire model in here?
 end
 
 function Wheel:getTireSize(): number
@@ -450,7 +456,7 @@ params.CollisionGroup = "Car"
 function Wheel:update(dt: number): {number}
 	local result = workspace:Raycast(self._wheel.Position, Vector3.new(0, -1, 0), params)
 	if result.Material ~= Enum.Material.Concrete then
-		self:changeHealth(-1 * dt)
+		self:changeHealth(-1 * dt) -- Update this to take into account tire compound
 	end
 
 	-- update stress
@@ -512,6 +518,18 @@ function Vehicle:isFlipped(): boolean
 end
 
 function Vehicle:update(values: {throttle: number, steer: number}, dt: number): {any}
+	local engineBoost = 0
+	
+	if self.generator then
+		engineBoost += self.generator:update()
+	end
+	if self.turbocharger then
+		engineBoost += self.turbocharger:update()
+	end
+
+	local engineRPM, engineTorque = self.engine:update(values.throttle, engineBoost, dt)
+	local gearboxRPM, gearboxTorque = self.gearbox:update(engineRPM, engineTorque)
+	local steer = self.steeringColumn:update(values.steer, dt)
 	
 	return {
 	angularVelocity = self.engine:update(),
