@@ -6,6 +6,7 @@ for different type of cars.
 --------------------------------IMPORTS-------------------------------
 
 local Enums = require(script.Enums)
+local Signal = require(script.Signal)
 
 ---------------------------INTERNAL CLASSES---------------------------
 
@@ -19,27 +20,28 @@ type Config = {
 		turbocharger: boolean,
 	},
 	engine: {
-		minRPM: number,
-		maxRPM: number,
+		min_rpm: number,
+		max_rpm: number,
 		horsepower: number,
-		maxTorque: number,
+		max_torque: number,
 	},
 	generator: {
-		maxEnergy: number,
-		chargeRate: number,
-		dischargeRate: number,
+		max_energy: number,
+		charge_rate: number,
+		discharge_rate: number,
 	}?,
 	gearbox: {
-		gearRatios: {number},
-		finalDrive: number,
-		transmission: Enums.Transmission
+		gear_ratios: {number},
+		final_drive: number,
+		transmission: Enums.Transmission,
+		shift_time: number,
 	},
-	steeringColumn: {
-		maxSteeringAngle: number,
+	steering_column: {
+		max_steering_angle: number,
 	},
-	wheel: {
-		defaultTireCompound: Enums.TireCompound,
-		defaultTraction: number,
+	wheels: {
+		defaul_tire_compound: Enums.TireCompound,
+		default_traction: number,
 	},
 }
 
@@ -49,70 +51,74 @@ Engine.__index = Engine
 type Engine = {
 	_vehicle: Vehicle,
 	_rpm: number,
-	_minRPM: number,
-	_maxRPM: number,
+	_min_rpm: number,
+	_max_rpm: number,
+	_torque: number,
+	_max_torque: number,
 	_horsepower: number,
 	_health: number,
-	_maxTorque: number,
 
 	new: (vehicle: Vehicle, config: Config.engine) -> Engine,
-	getTorque: (self: Engine) -> number,
-	getRPM: (self: Engine) -> number,
-	getHealth: (self: Engine) -> number,
-	changeHealth: (self: Engine, amount: number) -> (),
-	update: (self: Engine, throttle: number, engineBoost: number?, dt: number) -> number, number,
+	get_torque: (self: Engine) -> number,
+	get_rpm: (self: Engine) -> number,
+	get_health: (self: Engine) -> number,
+	change_health: (self: Engine, amount: number) -> (),
+	update: (self: Engine, throttle: number, engine_boost: number?, dt: number) -> (number, number)
 }
 
-local function lerp(a: number, b: number, t: number): number
+--[[local function lerp(a: number, b: number, t: number): number
 	return a + (b - a) * t
-end
+end]]
 
 function Engine.new(vehicle: Vehicle, config: Config.engine): Engine
 	local self = setmetatable({}, Engine) :: Engine
 	self._vehicle = vehicle
 	self._rpm = 0
-	self._minRPM = config.minRPM
-	self._maxRPM = config.maxRPM
+	self._min_rpm = config.min_rpm
+	self._max_rpm = config.max_rpm
+	self._torque = 0
+	self._max_torque = config.max_torque
 	self._horsepower = config.horsepower
 	self._health = 100
-	self._maxTorque = config.maxTorque
 
 	return self
 end
 
-function Engine:getTorque(): number
-	return (self._rpm * 5252) / self._rpm
+function Engine:get_torque(): number
+	return self._torque -- Returns torque in Newton-meter (Nm)
 end
 
-function Engine:getRPM(): number
+function Engine:get_rpm(): number
 	return self._rpm
 end
 
-function Engine:getHealth(): number
+function Engine:get_health(): number
 	return self._health
 end
 
-function Engine:changeHealth(amount: number): ()
+function Engine:change_health(amount: number): ()
 	self._health += amount
 end
 
-function Engine:update(throttle: number, engineBoost, number?, dt: number): number, number
-	self._rpm = (self._vehicle:getCurrentSpeed()
-		* self._vehicle.gearbox:getGearRatio(self._vehicle.gearbox:getGear())
-		* 336) / self._vehicle.wheels[1]:getTireSize()
-	self._rpm = math.clamp(self._rpm, self._minRPM, self._maxRPM)
+function Engine:update(throttle: number, engine_boost: number?, dt: number): (number, number)
+	self._rpm = (self._vehicle:get_current_speed()
+		* self._vehicle.gearbox:get_gear_ratio(self._vehicle.gearbox:get_gear())
+		* 336) / self._vehicle.wheels[1]:get_tire_size()
+	self._rpm = math.clamp(self._rpm, self._min_rpm, self._max_rpm)
+	
+	self._torque = (self._horsepower * 7127) / self._rpm
 	
 	if self._health <= 0 then
 		return self._rpm
 	end
-	
+
 	if throttle ~= 0 then
-		
+
 	else
-		
+
 	end
-	
-	return self._rpm, (self._horsepower * 5252) / self._rpm
+
+	return self._rpm, self._torque
 end
 
 ---------------------------GENERATOR CLASS----------------------------
@@ -123,28 +129,28 @@ Generator.__index = Generator
 type Generator = {
 	_vehicle: Vehicle,
 	_active: boolean,
-	_energyStored: number,
-	_maxEnergy: number,
-	_chargeRate: number,
-	_dischargeRate: number,
+	_energy_stored: number,
+	_max_energy: number,
+	_charge_rate: number,
+	_discharge_rate: number,
 	_output: number,
 	_health: number,
 
 	new: (vehicle: Vehicle, config: Config.generator) -> Generator,
 	activate: (self: Generator, value: boolean) -> (),
-	isActive: (self: Generator) -> boolean,
-	getHealth: (self: Generator) -> number,
-	changeHealth: (self: Generator, amount: number) -> (),
+	is_active: (self: Generator) -> boolean,
+	get_health: (self: Generator) -> number,
+	change_health: (self: Generator, amount: number) -> (),
 }
 
 function Generator.new(vehicle: Vehicle, config: Config.generator): Generator
 	local self = setmetatable({}, Generator) :: Generator
 	self._vehicle = vehicle
 	self._active = false
-	self._energyStored = 4000 -- in kJ
-	self._maxEnergy = config.maxEnergy or 4000
-	self._chargeRate = config.chargeRate or 50
-	self._dischargeRate = config.dischargeRate or 120
+	self._energy_stored = 4000 -- in kJ
+	self._max_energy = config.max_energy or 4000
+	self._charge_rate = config.charge_rate or 50
+	self._discharge_rate = config.discharge_rate or 120
 	self._output = 0 -- in kJ
 	self._health = 100
 
@@ -155,23 +161,23 @@ function Generator:activate(value: boolean): ()
 	self._active = value
 end
 
-function Generator:isActive(): boolean
+function Generator:is_active(): boolean
 	return self._active
 end
 
-function Generator:getHealth(): number
+function Generator:get_health(): number
 	return self._health
 end
 
-function Generator:changeHealth(amount: number): ()
+function Generator:change_health(amount: number): ()
 	self._health += amount
 end
 
 function Generator:update(dt: number): number
-	if self:isActive() then
-		local discharge = math.min(self._energyStored, self._dischargeRate)
+	if self:is_active() then
+		local discharge = math.min(self._energy_stored, self._discharge_rate)
 		self._output = discharge
-		self._energyStored -= discharge
+		self._energy_stored -= discharge
 	else
 		self._output = 0 -- take in brake power and charge. chargeRate * dt * throttleFloat?
 	end
@@ -192,10 +198,10 @@ type Turbocharger = {
 
 	new: (vehicle: Vehicle) -> Turbocharger,
 	activate: (self: Turbocharger, value: boolean) -> (),
-	isActive: (self: Turbocharger) -> boolean,
-	getBoost: (self: Turbocharger) -> number,
-	getHealth: (self: Turbocharger) -> number,
-	changeHealth: (self: Turbocharger, amount: number) -> (),
+	is_active: (self: Turbocharger) -> boolean,
+	get_boost: (self: Turbocharger) -> number,
+	get_health: (self: Turbocharger) -> number,
+	change_health: (self: Turbocharger, amount: number) -> (),
 }
 
 function Turbocharger.new(vehicle: Vehicle): Turbocharger
@@ -212,19 +218,19 @@ function Turbocharger:activate(value: boolean): ()
 	self._active = value
 end
 
-function Turbocharger:isActive(): boolean
+function Turbocharger:is_active(): boolean
 	return self._active
 end
 
-function Turbocharger:getBoost(): number
+function Turbocharger:get_boost(): number
 	return self._boost
 end
 
-function Turbocharger:getHealth(): number
+function Turbocharger:get_health(): number
 	return self._health
 end
 
-function Turbocharger:changeHealth(amount: number): ()
+function Turbocharger:change_health(amount: number): ()
 	self._health += amount
 end
 
@@ -236,41 +242,42 @@ Gearbox.__index = Gearbox
 type Gearbox = {
 	_vehicle: Vehicle,
 	_gear: number,
-	_gearRatios: {number},
-	_finalDrive: number,
+	_gear_ratios: {number},
+	_final_drive: number,
 	_transmission: number,
-	_maxGearRPMs: {number},
+	_max_gear_rpms: {number},
+	_shift_time: number,
 	_health: number,
 
 	new: (vehicle: Vehicle, config: Config.gearbox) -> Gearbox,
-	shiftUp: (self: Gearbox) -> (),
-	shiftDown: (self: Gearbox) -> (),
-	getGear: (self: Gearbox) -> number,
-	getTorque: (self: Gearbox) -> number,
-	getHealth: (self: Gearbox) -> number,
-	changeHealth: (self: Gearbox, amount: number) -> (),
-	update: (self: Gearbox, engineRPM: number, engineTorque: number) -> number, number,
+	shift: (self: Gearbox, direction: Enums.GearShiftDirection) -> (),
+	get_gear: (self: Gearbox) -> number,
+	get_health: (self: Gearbox) -> number,
+	change_health: (self: Gearbox, amount: number) -> (),
+	update: (self: Gearbox, engine_rpm: number, engine_torque: number) -> (number, number)
 }
 
 function Gearbox.new(vehicle: Vehicle, config: Config.gearbox): Gearbox
 	local self = setmetatable({}, Gearbox) :: Gearbox
 	self._vehicle = vehicle
 	self._gear = 1
-	self._gearRatios = config.gearRatios
-	self._finalDrive = config.finalDrive
+	self._gear_ratios = config.gear_ratios
+	self._final_drive = config.final_drive
 	self._transmission = config.transmission
-	self._maxGearRPMs = {}
+	self._max_gear_rpms = {}
+	self._shift_time = config.shift_time
 	self._health = 100
 end
 
+--[[
 function Gearbox:shiftUp(): ()
 	if self._health <= 0 then
 		return
 	end
 
 	self._gear += 1
-	if self._vehicle.engine:getRPM() >= self._maxGearRPMs[self._gear - 1] + 250 then
-		self:changeHealth(-0.5)
+	if self._vehicle.engine:get_rpm() >= self._max_gear_rpms[self._gear - 1] + 250 then
+		self:change_health(-0.5)
 	end
 end
 
@@ -280,30 +287,57 @@ function Gearbox:shiftDown(): ()
 	end
 
 	self._gear -= 1
-	if self._vehicle.engine:getRPM() > self._maxGearRPMs[self._gear] then
-		self:changeHealth(-2)
+	if self._vehicle.engine:get_rpm() > self._max_gear_rpms[self._gear] then
+		self:change_health(-2)
+	end
+end
+]]
+
+function Gearbox:shift(direction: Enums.GearShiftDirection): ()
+	if self._health <= 0 then
+		return
+	end
+	
+	self._gear += direction
+	local engine_rpm = self._vehicle.engine:get_rpm()
+	if direction == Enums.GearShiftDirection.Up then
+		if engine_rpm < self._max_gear_rpms[self._gear] then
+			
+		end
+	elseif direction == Enums.GearShiftDirection.Down then
+		if engine_rpm > self._max_gear_rpms[self._gear + 1] then
+			
+		end
+		if self._vehicle.engine
 	end
 end
 
-function Gearbox:getGear(): number
+function Gearbox:get_gear(): number
 	return self._gear
 end
 
--- Input engine torque
-function Gearbox:getTorque(torque: number): number
-	return torque * self._gearRatios[self._gear] -- Isn't this the formula for calculating gearbox rpm?, need to come back to this
-end
-
-function Gearbox:getHealth(): number
+function Gearbox:get_health(): number
 	return self._health
 end
 
-function Gearbox:changeHealth(amount: number): ()
+function Gearbox:change_health(amount: number): ()
 	self._health += amount
 end
 
-function Gearbox:update(engineRPM: number, engineTorque: number): number, number
-	return engineRPM * self._gearRatios[self._gear]
+function Gearbox:update(engine_rpm: number, engine_torque: number): (number, number)
+	if self._health <= 0 then
+		return -- Is this even valid? I'm pretty sure if a gearbox is broken, it just can't change gears
+	end
+	
+	local shift_delay = self._shift_time * (1 + (1 - self:get_health()))
+	-- Add in gear slip
+	if self._transmission == Enums.Transmission.Automatic then
+		
+	elseif self._transmission == Enums.Transmission.Manual then
+		local gearbox_rpm = engine_rpm / self._gear_ratios[self._gear]
+		local gearbox_torque = engine_torque * self._gear_ratios[self._gear] -- Newton-meter (Nm)
+		return gearbox_rpm, gearbox_torque
+	end
 end
 
 ------------------------------AXLE CLASS------------------------------
@@ -313,28 +347,28 @@ Axle.__index = Axle
 
 type Axle = {
 	_vehicle: Vehicle,
-	_axleType: number,
+	_axle_type: number,
 	_health: number,
 
-	new: (vehicle: Vehicle, axleType: Enums.AxleType) -> Axle,
-	getHealth: (self: Axle) -> number,
-	changeHealth: (self: Axle, amount: number) -> (),
+	new: (vehicle: Vehicle, axle_type: Enums.AxleType) -> Axle,
+	get_health: (self: Axle) -> number,
+	change_health: (self: Axle, amount: number) -> (),
 }
 
-function Axle.new(vehicle: Vehicle, axleType: Enums.AxleType): Axle
+function Axle.new(vehicle: Vehicle, axle_type: Enums.AxleType): Axle
 	local self = setmetatable({}, Axle) :: Axle
 	self._vehicle = vehicle
-	self._axleType = axleType
+	self._axle_type = axle_type
 	self._health = 100
 
 	return self
 end
 
-function Axle:getHealth(): number
+function Axle:get_health(): number
 	return self._health
 end
 
-function Axle:changeHealth(amount: number): ()
+function Axle:change_health(amount: number): ()
 	self._health += amount
 end
 
@@ -345,40 +379,41 @@ SteeringColumn.__index = SteeringColumn
 
 
 type SteeringColumn = {
-	_steeringAngle: number,
-	_maxSteeringAngle: number,
+	_steering_angle: number,
+	_max_steering_angle: number,
 	_health: number,
 
-	new: (vehicle: Vehicle, config: Config.steeringAngle) -> SteeringColumn,
-	getHealth: (self: SteeringColumn) -> number,
-	changeHealth: (self: SteeringColumn, amount: number) -> (),
-	update: (self: SteeringColumn, steerFloat: number, dt: number) -> number,
+	new: (vehicle: Vehicle, config: Config.steering_column) -> SteeringColumn,
+	get_health: (self: SteeringColumn) -> number,
+	change_health: (self: SteeringColumn, amount: number) -> (),
+	update: (self: SteeringColumn, steer_float: number, dt: number) -> number,
 }
 
-function SteeringColumn.new(vehicle: Vehicle, config: Config.steeringAngle): SteeringColumn
+function SteeringColumn.new(vehicle: Vehicle, config: Config.steering_column): SteeringColumn
 	local self = setmetatable({}, SteeringColumn) :: SteeringColumn
-	self._steeringAngle = 0
-	self._maxSteeringAngle = config.maxSteeringAngle
+	self._vehicle = vehicle
+	self._steering_angle = 0
+	self._max_steering_angle = config.max_steering_angle
 	self._health = 100
 	return self
 end
 
-function SteeringColumn:getHealth(): number
+function SteeringColumn:get_health(): number
 	return self._health
 end
 
-function SteeringColumn:changeHealth(amount: number): ()
+function SteeringColumn:change_health(amount: number): ()
 	self._health += amount
 end
 
-function SteeringColumn:update(steerFloat: number, dt: number): number
+function SteeringColumn:update(steer_float: number, dt: number): number
 	if self._health <= 0 then
-		return 0
+		return self._steering_angle
 	end
 
-	local newAngle = (steerFloat * self._maxSteeringAngle) - self._steeringAngle --lerp(self._steeringAngle, steerFloat, self._health / 100)
-	self._steeringAngle = newAngle
-	return newAngle
+	local new_angle = (steer_float * self._max_steering_angle) - self._steering_angle --lerp(self._steering_angle, steerFloat, self._health / 100)
+	self._steering_angle = new_angle
+	return new_angle
 end
 
 -----------------------------WHEEL CLASS------------------------------
@@ -389,29 +424,29 @@ Wheel.__index = Wheel
 type Wheel = {
 	_vehicle: Vehicle,
 	_wheel: BasePart,
-	_tireCompound: number,
+	_tire_compound: number,
 	_traction: number,
 	_temperature: number,
 	_stress: number,
 	_powered: boolean,
 	_health: number,
 
-	new: (vehicle: Vehicle, wheel: BasePart, powered: boolean, config: Config.wheel) -> Wheel,
-	getTraction: (self: Wheel) -> number,
-	updateTraction: (self: Wheel, traction: number) -> (),
-	changeWheel: (self: Wheel, compound: Enums.TireCompound) -> (),
-	getTireSize: (self: Wheel) -> number,
-	getHealth: (self: Wheel) -> number,
-	changeHealth: (self: Wheel, amount: number) -> (),
+	new: (vehicle: Vehicle, wheel: BasePart, powered: boolean, config: Config.wheels) -> Wheel,
+	get_traction: (self: Wheel) -> number,
+	update_traction: (self: Wheel, traction: number) -> (),
+	change_wheel: (self: Wheel, compound: Enums.TireCompound) -> (),
+	get_tire_size: (self: Wheel) -> number,
+	get_health: (self: Wheel) -> number,
+	change_health: (self: Wheel, amount: number) -> (),
 	update: (self: Wheel, dt: number) -> {number},
 }
 
-function Wheel.new(vehicle: Vehicle, wheel: BasePart, powered: boolean, config: Config.wheel): Wheel
+function Wheel.new(vehicle: Vehicle, wheel: BasePart, powered: boolean, config: Config.wheels): Wheel
 	local self = setmetatable({}, Wheel) :: Wheel
 	self._vehicle = vehicle
 	self._wheel = wheel
-	self._tireCompound = config.defaultTireCompound
-	self._traction = config.defaultTraction
+	self._tire_compound = config.default_tire_compound
+	self._traction = config.default_traction
 	self._temperature = 15 -- in °C
 	self._stress = 0
 	self._powered = powered
@@ -420,33 +455,33 @@ function Wheel.new(vehicle: Vehicle, wheel: BasePart, powered: boolean, config: 
 	return self
 end
 
-function Wheel:getTraction(): number
+function Wheel:get_traction(): number
 	return self._traction
 end
 
-function Wheel:updateTraction(traction: number): ()
+function Wheel:update_traction(traction: number): ()
 	self._traction = traction
 end
 
-function Wheel:changeWheel(compound: Enums.TireCompound)
-	self._tireCompound = compound
+function Wheel:change_wheel(compound: Enums.TireCompound)
+	self._tire_compound = compound
 	self._traction = 0 -- TODO: replace with a dictionary lookup of default tractions?
 	self._health = 100
 	self._stress = 0
 	self._temperature = 15 -- We could probably get the temperature from whatever weather control system nate has, convert to C
-	
+
 	-- I guess I should update the tire model in here?
 end
 
-function Wheel:getTireSize(): number
+function Wheel:get_tire_size(): number
 	return self._wheel.Size.Y
 end
 
-function Wheel:getHealth(): number
+function Wheel:get_health(): number
 	return self._health
 end
 
-function Wheel:changeHealth(amount: number): ()
+function Wheel:change_health(amount: number): ()
 	self._health += amount
 end
 
@@ -456,7 +491,7 @@ params.CollisionGroup = "Car"
 function Wheel:update(dt: number): {number}
 	local result = workspace:Raycast(self._wheel.Position, Vector3.new(0, -1, 0), params)
 	if result.Material ~= Enum.Material.Concrete then
-		self:changeHealth(-1 * dt) -- Update this to take into account tire compound
+		self:change_health(-1 * dt) -- Update this to take into account tire compound
 	end
 
 	-- update stress
@@ -476,16 +511,17 @@ type Vehicle = {
 	generator: Generator?,
 	turbocharger: Turbocharger?,
 	gearbox: Gearbox,
-	frontAxle: Axle,
-	rearAxle: Axle,
-	steeringColumn: SteeringColumn,
+	front_axle: Axle,
+	rear_axle: Axle,
+	steering_column: SteeringColumn,
 	wheels: {Wheel},
+	_drivetrain: Enums.Drivetrain,
 	_chassis: BasePart,
 
 	new: (wheels: {[string]: BasePart}, config: Config) -> Vehicle,
-	getCurrentSpeed: (self: Vehicle) -> number,
-	isFlipped: (self: Vehicle) -> boolean,
-	update: (self: Vehicle, values: {number}, dt: number) -> {any},
+	get_current_speed: (self: Vehicle) -> number,
+	is_flipped: (self: Vehicle) -> boolean,
+	update: (self: Vehicle, values: {number}, dt: number) -> {number},
 }
 
 function Vehicle.new(wheels: {[string]: BasePart}, config: Config): Vehicle
@@ -494,48 +530,54 @@ function Vehicle.new(wheels: {[string]: BasePart}, config: Config): Vehicle
 	self.generator = config.components.generator and Generator.new(self, config.generator) or nil
 	self.turbocharger = config.components.turbocharger and Turbocharger.new(self, config.turbocharger) or nil
 	self.gearbox = Gearbox.new(self, config.gearbox)
-	self.frontAxle = Axle.new(self, 1)
-	self.rearAxle = Axle.new(self, -1)
-	self.steeringColumn = SteeringColumn.new(self, config.steeringColumn)
+	self.front_axle = Axle.new(self, Enums.AxleType.Front)
+	self.rear_axle = Axle.new(self, Enums.AxleType.Rear)
+	self.steering_column = SteeringColumn.new(self, config.steering_column)
 	self.wheels = { -- Find a better way to do this than hardcoding the wheels
-		FL = Wheel.new(self, wheels.FL, false, config.wheel),
-		FR = Wheel.new(self, wheels.FR, false, config.wheel),
-		RL = Wheel.new(self, wheels.RL, true, config.wheel),
-		RR = Wheel.new(self, wheels.RR, true, config.wheel),
+		FL = Wheel.new(self, wheels.FL, false, config.wheels),
+		FR = Wheel.new(self, wheels.FR, false, config.wheels),
+		RL = Wheel.new(self, wheels.RL, true, config.wheels),
+		RR = Wheel.new(self, wheels.RR, true, config.wheels),
 	}
+	self._drivetrain = config.drivetrain
 	self._chassis = config.chassis
+	
+	self.gear_shift = Signal.new()
 	return self
 end
 
-function Vehicle:getCurrentSpeed(): number
+function Vehicle:get_current_speed(): number
 	return self._chassis.AssemblyLinearVelocity.Magnitude
 end
 
-function Vehicle:isFlipped(): boolean
-	local upCFrame = self._chassis.CFrame.UpVector
+function Vehicle:is_flipped(): boolean
+	local up_CFrame = self._chassis.CFrame.UpVector
 	local position = self._chassis.Position -- get model equivalent
-	return position.Y > (position + upCFrame).Y
+	return position.Y > (position + up_CFrame).Y
 end
 
-function Vehicle:update(values: {throttle: number, steer: number}, dt: number): {any}
-	local engineBoost = 0
-	
+function Vehicle:update(values: {throttle: number, steer: number}, dt: number): {number}
+	local engine_boost = 0
+
 	if self.generator then
-		engineBoost += self.generator:update()
+		engine_boost += self.generator:update()
 	end
 	if self.turbocharger then
-		engineBoost += self.turbocharger:update()
+		engine_boost += self.turbocharger:update()
 	end
 
-	local engineRPM, engineTorque = self.engine:update(values.throttle, engineBoost, dt)
-	local gearboxRPM, gearboxTorque = self.gearbox:update(engineRPM, engineTorque)
-	local steer = self.steeringColumn:update(values.steer, dt)
+	local engine_rpm, engine_torque = self.engine:update(values.throttle, engine_boost, dt)
+	local gearbox_rpm, gearbox_torque = self.gearbox:update(engine_rpm, engine_torque)
+	local steer = self.steering_column:update(values.steer, dt)
+	
+	for wheel, _ in pairs(self.wheels) do
+		
+	end
 	
 	return {
-	angularVelocity = self.engine:update(),
-	motorMaxTorque = self.gearbox:update(), --  FINISH THIS
-	newSteeringAngle = self.steeringColumn:update(),
-	
+		angular_velocity = gearbox_rpm, -- Is this correct?
+		motor_max_torque = gearbox_torque,
+		new_steering_angle = steer,
 	}
 end
 
