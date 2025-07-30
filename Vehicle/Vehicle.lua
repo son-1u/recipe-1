@@ -466,6 +466,7 @@ function Wheel.new(vehicle: Vehicle, wheel: BasePart, config: Config.wheels): Wh
 	local self = setmetatable({}, Wheel)
 	self._vehicle = vehicle
 	self._wheel = wheel
+	self._tire_model = 0 -- TODO: REPLACE THIS WITH MODEL
 	self._tire_compound = config.default_tire_compound
 	self._traction = config.default_traction
 	self._temperature = 15 -- in °C
@@ -537,11 +538,15 @@ export type Vehicle = typeof(setmetatable({} :: {
 	steering_column: SteeringColumn,
 	wheels: {Wheel},
 	_max_downforce: number,
+	_downforce_percentage: number,
 	_drivetrain: Enums.Drivetrain,
 	_chassis: BasePart,
+	model: Model,
+	_input_object: Input,
+	_camera_object: Camera,
 
 	new: (wheels: {[string]: BasePart}, config: Config) -> Vehicle,
-	get_current_speed: (self: Vehicle) -> number,
+	get_wheel_speed: (self: Vehicle) -> number,
 	get_real_speed: (self: Vehicle) -> number,
 	is_flipped: (self: Vehicle) -> boolean,
 	update: (self: Vehicle, values: {number}, dt: number) -> {number},
@@ -574,18 +579,18 @@ local function create_vehicle_model(prefab: Model, cframe: CFrame, config): Mode
 	end 
 end
 
---- Downforce calculation
--- 
-local function update_downforce(self: Vehicle, chassis_part: Part, downforce_force_object: VectorForce): ()
+local function update_downforce(self: Vehicle, chassis_part: Part, downforce_object: VectorForce): ()
 	local normalized_velocity = chassis_part.AssemblyLinearVelocity.Unit
 	local downforce_factor = normalized_velocity:Dot(chassis_part.CFrame.RightVector.Unit)
-	local downforce_curve_value
-	local downforce_mapped_to_speed = chassis_part.AssemblyLinearVelocity.Magnitude * downforce_curve_value
-	local downforce = downforce_mapped_to_speed * self._max_downforce * -chassis_part.CFrame.UpVector
+	local downforce = 0
+	if downforce_factor ~= -1 then -- Going forward
+		local downforce_mapped_to_speed = chassis_part.AssemblyLinearVelocity.Magnitude * downforce_curve_value
+		downforce = downforce_mapped_to_speed * self._max_downforce * -chassis_part.CFrame.UpVector
+	end
 	
 	--- Convert newtons to rowtons
 	-- 1 newton = 0.163 rowtons
-	downforce_force_object.Force.Y = downforce / 0.163
+	downforce_object.Force.Y = (downforce / 0.163) * self._downforce_percentage
 end
 
 function Vehicle.new(prefab: Model, cframe: CFrame, wheels: {[string]: BasePart}, config: Config): Vehicle
@@ -602,28 +607,37 @@ function Vehicle.new(prefab: Model, cframe: CFrame, wheels: {[string]: BasePart}
 		self.wheels[wheel_name] = Wheel.new(self, wheel_part, config.wheels)
 	end
 	
-	self._max_downforce = config -- TODO: GET CONFIG INDEX IN KG
+	self._max_downforce = config -- TODO: GET CONFIG INDEX IN NEWTONS
+	self._downforce_percentage = config -- TODO: ABOVE
 	
 	self._drivetrain = config.drivetrain -- TODO: maybe remove
 	self._chassis = config.chassis -- TODO: maybe remove
 	
-	self.occupant = nil
-	self.occupant_changed_signal = Signal.new()
+	self.model = create_vehicle_model(prefab)
 	self._input_object = Input.new()
 	self._camera_object = Camera.new() --TODO: PASS IN CAMERA ATTACHMENTS
 	return self
 end
 
 function Vehicle.bind_objects(self: Vehicle, camera_object: Camera, input_object: Input.Input): ()
+	local vehicle_seat = self.model:FindFirstDescendant("VehicleSeat") -- change this to driveseat maybe to allow for multiple seats?
 	
+	-- TODO: add events here
 end
 
-function Vehicle.get_current_speed(self: Vehicle): number
-	return self._chassis.AssemblyLinearVelocity.Magnitude -- TODO: make an engine speed method, make this one a wrapper to engine speed and another method for real speed
+function Vehicle.get_wheel_speed(self: Vehicle): number
+	local average_wheel_speed = 0
+	for _, wheel in pairs(self.wheels) do
+		average_wheel_speed += wheel._wheel.AssemblyAngularVelocity -- This doesn't take into account when a tyre is detached
+	end
+	
+	return average_wheel_speed
 end
 
+--- Vehicle.get_real_speed()
+-- Returns the speed of vehicle in studs per second
 function Vehicle.get_real_speed(self: Vehicle): number
-	
+	return -self._chassis.CFrame:PointToObjectSpace(self._chassis.AssemblyLinearVelocity).Z
 end
 
 function Vehicle.is_flipped(self: Vehicle): boolean
