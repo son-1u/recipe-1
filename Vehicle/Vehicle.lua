@@ -19,40 +19,60 @@ local Camera = require(script.Camera)
 
 -- A bunch of small component classes that helps with the physics simulation of the vehicle
 
+-------------------------BASE COMPONENT CLASS-------------------------
+
+local BaseComponent = {}
+BaseComponent.__index = BaseComponent
+
+type BaseComponent = typeof(setmetatable({} :: {
+	_vehicle: Vehicle,
+	_health: number,
+	health_changed: Signal,
+	
+	new: (vehicle: Vehicle, component_properties: {}) -> BaseComponent,
+	get_health: (self: BaseComponent) -> number,
+	change_health: (self: BaseComponent, amount: number) -> (),
+	destroy: (self: BaseComponent) -> (),
+}, BaseComponent))
+
+function BaseComponent.new(vehicle: Vehicle, component_properties: {}): BaseComponent
+	local self = {
+		_vehicle = vehicle,
+		_health = 100,
+		health_changed = Signal.new(),
+	}
+	
+	for k, v in pairs(component_properties) do
+		self[k] = v
+	end
+	
+	return self
+end
+
+function BaseComponent.get_health(self: BaseComponent): number,
+	return self._health
+end
+
+function BaseComponent.change_health(self: BaseComponent, amount: number): ()
+	self._health = math.clamp(self._health + amount, 0, 100)
+end
+
+function BaseComponent.destroy(self: BaseComponent): ()
+	for k, v in pairs(self) do
+		if getmetatable(v) == Signal then
+			v:DisconnectAll()
+		end
+		
+		self[k] = nil
+	end
+end
+
 -----------------------------ENGINE CLASS-----------------------------
 
-type Config = {
-	engine: {
-		min_rpm: number,
-		max_rpm: number,
-		horsepower: number,
-		max_torque: number,
-	},
-	generator: {
-		max_energy: number,
-		charge_rate: number,
-		discharge_rate: number,
-	}?,
-	gearbox: {
-		gear_ratios: {number},
-		final_drive: number,
-		transmission: Enums.Transmission,
-		shift_time: number,
-	},
-	steering_column: {
-		max_steering_angle: number,
-	},
-	wheels: {
-		default_tire_compound: Enums.TireCompound,
-		default_traction: number,
-	},
-}
-
-local Engine = {}
+local Engine = setmetatable({}, BaseComponent)
 Engine.__index = Engine
 
-type Engine = typeof(setmetatable({} :: {
-	_vehicle: Vehicle,
+type Engine = BaseComponent & typeof(setmetatable({} :: {
 	_idle_throttle: number,
 	_rpm: number,
 	_min_rpm: number,
@@ -62,54 +82,38 @@ type Engine = typeof(setmetatable({} :: {
 	_max_torque: number,
 	_horsepower: number,
 	_max_horsepower: number,
-	_health: number,
-	health_changed: Signal,
 
-	new: (vehicle: Vehicle, config: Config.engine) -> Engine,
+	new: (vehicle: Vehicle, config: {}) -> Engine,
 	get_torque: (self: Engine) -> number,
 	get_rpm: (self: Engine) -> number,
-	get_health: (self: Engine) -> number,
-	change_health: (self: Engine, amount: number) -> (),
 	update: (self: Engine, throttle: number, engine_boost: number?, dt: number) -> (number, number),
-	destroy: (self: Engine) -> (),
 }, Engine))
 
 local function lerp(a: number, b: number, t: number): number
 	return a + (b - a) * t
 end
 
-function Engine.new(vehicle: Vehicle, config: Config.engine): Engine
-	local self = setmetatable({}, Engine)
-	self._vehicle = vehicle
-	self._idle_throttle = config.idle_throttle
-	self._rpm = 0
-	self._min_rpm = config.min_rpm -- Idle RPM
-	self._max_rpm = config.max_rpm -- Redline
-	self._torque = 0
-	self._min_torque = config.min_torque -- Idle torque
-	self._max_torque = config.max_torque -- Peak torque
-	self._horsepower = 0
-	self._max_horsepower = config.max_horsepower
-	self._health = 100
-	self.health_changed = Signal.new()
-
-	return self
+function Engine.new(vehicle: Vehicle, config: {}): Engine
+	return setmetatable(BaseComponent.new(vehicle, {
+		_idle_throttle = config.idle_throttle,
+		_rpm = 0,
+		_min_rpm = config.min_rpm, -- Idle RPM
+		_max_rpm = config.max_rpm, -- Redline
+		_torque = 0,
+		_min_torque = config.min_torque, -- Idle torque
+		_max_torque = config.max_torque, -- Peak torque
+		_horsepower = 0,
+		_max_horsepower = config.max_horsepower,
+	}), Engine)
 end
 
+-- Returns torque in Newton-meter (Nm)
 function Engine.get_torque(self: Engine): number
-	return self._torque -- Returns torque in Newton-meter (Nm)
+	return self._torque
 end
 
 function Engine.get_rpm(self: Engine): number
 	return self._rpm
-end
-
-function Engine.get_health(self: Engine): number
-	return self._health
-end
-
-function Engine.change_health(self: Engine, amount: number): ()
-	self._health += amount
 end
 
 function Engine.update(self: Engine, throttle: number, engine_boost: number?, dt: number): (number, number)
@@ -155,201 +159,107 @@ function Engine.update(self: Engine, throttle: number, engine_boost: number?, dt
 	return self._rpm, self._torque
 end
 
-function Engine.destroy(self: Engine): ()
-	self._vehicle = nil
-	self._idle_throttle = nil
-	self._rpm = nil
-	self._min_rpm = nil
-	self._max_rpm = nil
-	self._torque = nil
-	self._min_torque = nil
-	self._max_torque = nil
-	self._horsepower = nil
-	self._max_horsepower = nil
-	self._health = nil
-	self.health_changed:DisconnectAll()
-	self.health_changed = nil
-end
+-------------------------ELECTRIC MOTOR CLASS-------------------------
 
----------------------------GENERATOR CLASS----------------------------
+local ElectricMotor = setmetatable({}, BaseComponent)
+ElectricMotor.__index = ElectricMotor
 
-local Generator = {}
-Generator.__index = Generator
-
-type Generator = typeof(setmetatable({} :: {
-	_vehicle: Vehicle,
+type ElectricMotor = BaseComponent & typeof(setmetatable({} :: {
 	_rpm: number,
-	_min_rpm: number,
 	_max_rpm: number,
-	--_active: boolean,
-	--_energy_stored: number,
-	--_max_energy: number,
-	--_charge_rate: number,
-	--_discharge_rate: number,
-	_max_output: number,
-	_health: number,
-	health_changed: Signal,
+	_torque: number,
+	_min_torque: number,
+	_max_torque: number,
+	_kilowatts: number,
+	_max_kilowatts: number,
+	
+	new: (vehicle: Vehicle, config: {}) -> ElectricMotor,
+	get_torque: (self: ElectricMotor) -> number,
+	get_rpm: (self: ElectricMotor) -> number,
+	update: (self: ElectricMotor, throttle: number, dt: number) -> (number, number),
+}, ElectricMotor))
 
-	new: (vehicle: Vehicle, config: Config.generator) -> Generator,
-	--activate: (self: Generator, value: boolean) -> (),
-	--is_active: (self: Generator) -> boolean,
-	get_health: (self: Generator) -> number,
-	change_health: (self: Generator, amount: number) -> (),
-	destroy: (self: Generator) -> (),
-}, Generator))
-
-function Generator.new(vehicle: Vehicle, config: Config.generator): Generator
-	local self = setmetatable({}, Generator)
-	self._vehicle = vehicle
-	self._rpm = 0
-	self._min_rpm = config.min_rpm
-	self._max_rpm = config.max_rpm
-	--self._active = false
-	--self._energy_stored = 4000 -- in kJ
-	--self._max_energy = config.max_energy or 4000
-	--self._charge_rate = config.charge_rate or 50
-	--self._discharge_rate = config.discharge_rate or 120
-	self._max_output = 0 -- in kJ
-	self._health = 100
-	self.health_changed = Signal.new()
-
-	return self
+function ElectricMotor.new(vehicle: Vehicle, config: {}): ()
+	return setmetatable(BaseComponent.new(vehicle, {
+		_rpm = 0,
+		_max_rpm = config.max_rpm,
+		_torque = 0,
+		_min_torque = config.min_torque,
+		_max_torque = config.max_torque,
+		_kilowatts = 0,
+		_max_kilowatts = config.max_kilowatts,
+	}), ElectricMotor)
 end
 
---function Generator.activate(self: Generator, value: boolean): ()
---	self._active = value
---end
-
---function Generator.is_active(self: Generator): boolean
---	return self._active
---end
-
-function Generator.get_health(self: Generator): number
-	return self._health
+-- Returns torque in Newton-meter (Nm)
+function ElectricMotor.get_torque(self: ElectricMotor): number
+	return self._torque
 end
 
-function Generator.change_health(self: Generator, amount: number): ()
-	self._health += amount
+function ElectricMotor.get_rpm(self: ElectricMotor): number
+	return self._rpm
 end
 
-function Generator.update(self: Generator, dt: number): number
-	if self._health <= 0 then
-		return 0
-	end
-
-	return self._output
-end
-
-function Generator.destroy(self: Generator): ()
-	self._vehicle = nil
-	self._rpm = nil
-	self._min_rpm = nil
-	self._max_rpm = nil
-	self._max_output = nil
-	self._health = nil
-	self.health_changed:DisconnectAll()
-	self.health_changed = nil
+function ElectricMotor.update(self: ElectricMotor, dt: number): (number, number)
+	
 end
 
 --------------------------TURBOCHARGER CLASS--------------------------
 
-local Turbocharger = {}
+local Turbocharger = setmetatable({}, BaseComponent)
 Turbocharger.__index = Turbocharger
 
-type Turbocharger = typeof(setmetatable({} :: {
-	_vehicle: Vehicle,
-	_active: boolean,
-	_boost: number,
-	_health: number,
-	health_changed: Signal,
+type Turbocharger = BaseComponent & typeof(setmetatable({} :: {
+	_rpm: number,
+	_max_rpm: number,
 
 	new: (vehicle: Vehicle) -> Turbocharger,
-	activate: (self: Turbocharger, value: boolean) -> (),
-	is_active: (self: Turbocharger) -> boolean,
-	get_boost: (self: Turbocharger) -> number,
-	get_health: (self: Turbocharger) -> number,
-	change_health: (self: Turbocharger, amount: number) -> (),
-	destroy: (self: Turbocharger) -> (),
+	update: (self: Turbocharger, dt: number) -> (),
 }, Turbocharger))
 
-function Turbocharger.new(vehicle: Vehicle): Turbocharger
-	local self = setmetatable({}, Turbocharger)
-	self._vehicle = vehicle
-	self._active = false
-	self._boost = 0
-	self._health = 100
-	self.health_changed = Signal.new()
-
-	return self
-end
-
-function Turbocharger.activate(self: Turbocharger, value: boolean): ()
-	self._active = value
-end
-
-function Turbocharger.is_active(self: Turbocharger): boolean
-	return self._active
+function Turbocharger.new(vehicle: Vehicle, config): Turbocharger
+	return setmetatable(BaseComponent.new(vehicle, {
+		_rpm = 0,
+		_max_rpm = config.max_rpm,
+	}), Turbocharger)
 end
 
 function Turbocharger.get_boost(self: Turbocharger): number
 	return self._boost
 end
 
-function Turbocharger.get_health(self: Turbocharger): number
-	return self._health
-end
-
-function Turbocharger.change_health(self: Turbocharger, amount: number): ()
-	self._health += amount
-end
-
-function Turbocharger.destroy(self: Turbocharger): ()
-	self._vehicle = nil
-	self._active = nil
-	self._boost = nil
-	self._health = nil
-	self.health_changed:DisconnectAll()
-	self.health_changed = nil
+function Turbocharger.update(self: Turbocharger, dt: number): ()
+	
 end
 
 -----------------------------GEARBOX CLASS----------------------------
 
-local Gearbox = {}
+local Gearbox = setmetatable({}, BaseComponent)
 Gearbox.__index = Gearbox
 
-type Gearbox = typeof(setmetatable({} :: {
-	_vehicle: Vehicle,
+type Gearbox = BaseComponent & typeof(setmetatable({} :: {
 	_gear: number,
 	_gear_ratios: {number},
 	_final_drive: number,
 	_transmission: number,
 	_max_gear_rpms: {number},
 	_shift_time: number,
-	_health: number,
-	health_changed: Signal,
 
-	new: (vehicle: Vehicle, config: Config.gearbox) -> Gearbox,
+	new: (vehicle: Vehicle, config: {}) -> Gearbox,
 	shift: (self: Gearbox, direction: Enums.GearShiftDirection) -> (),
 	get_gear: (self: Gearbox) -> number,
-	get_health: (self: Gearbox) -> number,
-	change_health: (self: Gearbox, amount: number) -> (),
 	update: (self: Gearbox, engine_rpm: number, engine_torque: number) -> (number, number),
-	destroy: (self: Gearbox) -> (),
 }, Gearbox))
 
-function Gearbox.new(vehicle: Vehicle, config: Config.gearbox): Gearbox
-	local self = setmetatable({}, Gearbox)
-	self._vehicle = vehicle
-	self._gear = 1
-	self._gear_ratios = config.gear_ratios
-	self._final_drive = config.final_drive
-	self._transmission = config.transmission
-	self._max_gear_rpms = {}
-	self._shift_time = config.shift_time
-	self._health = 100
-	self.health_changed = Signal.new()
-	
-	return self
+function Gearbox.new(vehicle: Vehicle, config: {}): Gearbox
+	return setmetatable(BaseComponent.new(vehicle, {
+		_gear = 1,
+		_gear_ratios = config.gear_ratios,
+		_final_drive = config.final_drive,
+		_transmission = config.transmission,
+		_max_gear_rpms = {},
+		_shift_time = config.shift_time,
+	}), Gearbox)
 end
 
 function Gearbox.shift(self: Gearbox, direction: Enums.GearShiftDirection): ()
@@ -375,14 +285,6 @@ function Gearbox.get_gear(self: Gearbox): number
 	return self._gear
 end
 
-function Gearbox.get_health(self: Gearbox): number
-	return self._health
-end
-
-function Gearbox.change_health(self: Gearbox, amount: number): ()
-	self._health += amount
-end
-
 function Gearbox.update(self: Gearbox, engine_rpm: number, engine_torque: number): (number, number)
 	if self._health <= 0 then
 		return -- Is this even valid? I'm pretty sure if a gearbox is broken, it just can't change gears
@@ -399,44 +301,24 @@ function Gearbox.update(self: Gearbox, engine_rpm: number, engine_torque: number
 	end
 end
 
-function Gearbox.destroy(self: Gearbox): ()
-	self._vehicle = nil
-	self._gear = nil
-	self._gear_ratios = nil
-	self._final_drive = nil
-	self._transmission = nil
-	self._max_gear_rpms = nil
-	self._shift_time = nil
-	self._health = nil
-	self.health_changed:DisconnectAll()
-	self.health_changed = nil
-end
-
 ------------------------------AXLE CLASS------------------------------
 
-local Axle = {}
+local Axle = setmetatable({}, BaseComponent)
 Axle.__index = Axle
 
-type Axle = typeof(setmetatable({} :: {
-	_vehicle: Vehicle,
-	_axle_type: number,
+type Axle = BaseComponent & typeof(setmetatable({} :: {
 	_connected_wheels: {Wheel},
-	_health: number,
-	health_changed: Signal,
 
-	new: (vehicle: Vehicle, axle_type: Enums.AxleType) -> Axle,
-	get_health: (self: Axle) -> number,
-	change_health: (self: Axle, amount: number) -> (),
-	destroy: (self: Axle) -> (),
+	new: (vehicle: Vehicle, connected_wheels: {Wheel}) -> Axle,
 }, Axle))
 
-function Axle.new(vehicle: Vehicle, axle_type: Enums.AxleType, connected_wheels: {Wheel}): Axle
-	local self = setmetatable({}, Axle)
-	self._vehicle = vehicle
-	self._axle_type = axle_type
-	self._connected_wheels = connected_wheels
-	self._health = 100
-	self.health_changed = Signal.new()
+function Axle.new(vehicle: Vehicle, connected_wheels: {Wheel}): Axle	
+	local self = setmetatable(BaseComponent.new(vehicle, {
+		_vehicle = vehicle,
+		_connected_wheels = connected_wheels,
+		_health = 100,
+		health_changed = Signal.new(),
+	}), Axle)
 	
 	self.health_changed:Connect(function()
 		if self._health >= 0 then
@@ -451,58 +333,24 @@ function Axle.new(vehicle: Vehicle, axle_type: Enums.AxleType, connected_wheels:
 	return self
 end
 
-function Axle.get_health(self: Axle): number
-	return self._health
-end
-
-function Axle.change_health(self: Axle, amount: number): ()
-	self._health += amount
-end
-
-function Axle.destroy(self: Axle): ()
-	self._vehicle = nil
-	self._axle_type = nil
-	self._connected_wheels = nil
-	self._health = nil
-	self.health_changed:DisconnectAll()
-	self.health_changed = nil
-end
-
 ------------------------STEERING COLUMN CLASS-------------------------
 
-local SteeringColumn = {}
+local SteeringColumn = setmetatable({}, BaseComponent)
 SteeringColumn.__index = SteeringColumn
 
-type SteeringColumn = typeof(setmetatable({} :: {
+type SteeringColumn = BaseComponent & typeof(setmetatable({} :: {
 	_steering_angle: number,
 	_max_steering_angle: number,
-	_health: number,
-	health_changed: Signal,
 
-	new: (vehicle: Vehicle, config: Config.steering_column) -> SteeringColumn,
-	get_health: (self: SteeringColumn) -> number,
-	change_health: (self: SteeringColumn, amount: number) -> (),
+	new: (vehicle: Vehicle, config: {}) -> SteeringColumn,
 	update: (self: SteeringColumn, steer_float: number, dt: number) -> number,
-	destroy: (self: SteeringColumn) -> (),
 }, SteeringColumn))
 
-function SteeringColumn.new(vehicle: Vehicle, config: Config.steering_column): SteeringColumn
-	local self = setmetatable({}, SteeringColumn)
-	self._vehicle = vehicle
-	self._steering_angle = 0
-	self._max_steering_angle = config.max_steering_angle
-	self._health = 100
-	self.health_changed = Signal.new()
-	
-	return self
-end
-
-function SteeringColumn.get_health(self: SteeringColumn): number
-	return self._health
-end
-
-function SteeringColumn.change_health(self: SteeringColumn, amount: number): ()
-	self._health += amount
+function SteeringColumn.new(vehicle: Vehicle, config: {}): SteeringColumn
+	return setmetatable(BaseComponent.new(vehicle, {
+		_steering_angle = 0,
+		_max_steering_angle = config.max_steering_angle,
+	}), SteeringColumn)
 end
 
 function SteeringColumn.update(self: SteeringColumn, steer_float: number, dt: number): number
@@ -515,57 +363,38 @@ function SteeringColumn.update(self: SteeringColumn, steer_float: number, dt: nu
 	return self._steering_angle
 end
 
-function SteeringColumn.destroy(self: SteeringColumn): ()
-	self._vehicle = nil
-	self._steering_angle = nil
-	self._max_steering_angle = nil
-	self._health = nil
-	self.health_changed:DisconnectAll()
-	self.health_changed = nil
-end
-
 -----------------------------WHEEL CLASS------------------------------
 
-local Wheel = {}
+local Wheel = setmetatable({}, BaseComponent)
 Wheel.__index = Wheel
 
-type Wheel = typeof(setmetatable({} :: {
-	_vehicle: Vehicle,
+type Wheel = BaseComponent & typeof(setmetatable({} :: {
 	wheel: BasePart,
 	is_front: boolean,
 	_tire_compound: number,
 	_traction: number,
 	_temperature: number,
 	_stress: number,
-	_health: number,
-	health_changed: Signal,
 
-	new: (vehicle: Vehicle, chassis_part: BasePart, wheel: BasePart, powered: boolean, config: Config.wheels) -> Wheel,
+	new: (vehicle: Vehicle, chassis_part: BasePart, wheel_part: BasePart, config: {}) -> Wheel,
 	get_traction: (self: Wheel) -> number,
 	update_traction: (self: Wheel, traction: number) -> (),
 	change_wheel: (self: Wheel, compound: Enums.TireCompound) -> (),
 	get_wheel_speed: (self: Wheel) -> number,
 	get_tire_diameter: (self: Wheel) -> number,
-	get_health: (self: Wheel) -> number,
-	change_health: (self: Wheel, amount: number) -> (),
 	update: (self: Wheel, dt: number) -> {number},
-	destroy: (self: Wheel) -> (),
 }, Wheel))
 
-function Wheel.new(vehicle: Vehicle, chassis_part: BasePart, wheel: BasePart, config: Config.wheels): Wheel
-	local self = setmetatable({}, Wheel)
-	self._vehicle = vehicle
-	self.wheel = wheel
-	self.is_front = -chassis_part.CFrame:PointToObjectSpace(wheel.Position).Z > 0
-	self.tire_model = 0 -- TODO: REPLACE THIS WITH MODEL
-	self.tire_compound = config.default_tire_compound
-	self._traction = config.default_traction
-	self._temperature = 15 -- in °C
-	self._stress = 0
-	self._health = 100
-	self.health_changed = Signal.new()
-
-	return self
+function Wheel.new(vehicle: Vehicle, chassis_part: BasePart, wheel_part: BasePart, config: {}): Wheel	
+	return setmetatable(BaseComponent.new(vehicle, {
+		wheel = wheel_part,
+		is_front = -chassis_part.CFrame:PointToObjectSpace(wheel_part.Position).Z > 0,
+		tire_model = config.tire_model,
+		tire_compound = config.default_tire_compound,
+		_traction = config.default_traction,
+		_temperature = workspace:GetAttribute("GlobalTemperature") or 20,
+		_stress = 0,
+	}), Wheel)
 end
 
 function Wheel.get_traction(self: Wheel): number
@@ -600,14 +429,6 @@ function Wheel.get_tire_diameter(self: Wheel): number
 	return self.wheel.Size.Y
 end
 
-function Wheel.get_health(self: Wheel): number
-	return self._health
-end
-
-function Wheel.change_health(self: Wheel, amount: number): ()
-	self._health += amount
-end
-
 local params = RaycastParams.new()
 params.FilterType = Enum.RaycastFilterType.Include
 params.CollisionGroup = "Car"
@@ -622,20 +443,6 @@ function Wheel.update(self: Wheel, dt: number): {number}
 	-- update wear
 	-- update temperature
 	-- update health
-end
-
-function Wheel.destroy(self: Wheel): ()
-	self._vehicle = nil
-	self.wheel = nil -- Don't need to destroy wheel part since Vehicle.destroy does it already
-	self.is_front = nil
-	self.tire_model = nil
-	self.tire_compound = nil
-	self._traction = nil
-	self._temperature = nil
-	self._stress = nil
-	self._health = nil
-	self.health_changed:DisconnectAll()
-	self.health_changed = nil
 end
 
 ------------------------------MAIN CLASS------------------------------
@@ -662,7 +469,7 @@ export type Vehicle = typeof(setmetatable({} :: {
 	_input_object: Input.Input,
 	_camera_object: Camera.Camera,
 
-	new: (wheels: {[string]: BasePart}, config: Config) -> Vehicle,
+	new: (prefab: Model, spawn_position: CFrame, config: {}) -> Vehicle,
 	get_wheel_speed: (self: Vehicle) -> number,
 	get_real_speed: (self: Vehicle) -> number,
 	is_flipped: (self: Vehicle) -> boolean,
@@ -681,7 +488,6 @@ local function create_vehicle_model(prefab: Model, spawn_position: CFrame, confi
 	local weight_brick_rear = vehicle.chassis:FindFirstChild("weight_brick_rear")
 	weight_brick_rear.CustomPhysicalProperties = true
 	weight_brick_rear.CustomPhysicalProperties.Density = config.vehicle_weight * (1 - config.weight_distribution)
-	
 	
 	-- Wheels
 	for _, wheel in pairs(vehicle.Chassis.Wheels:GetChildren()) do
@@ -730,44 +536,40 @@ local function update_downforce(self: Vehicle, chassis_part: Part, downforce_obj
 	downforce_object.Force.Y = math.min((downforce / 0.163) * self._downforce_percentage, self._max_downforce)
 end
 
-function Vehicle.new(prefab: Model, spawn_position: CFrame, wheels: {[string]: BasePart}, config: Config): Vehicle
-	local self = setmetatable({}, Vehicle)
+function Vehicle.new(prefab: Model, spawn_position: CFrame, config: {}): Vehicle
+	local self = setmetatable({
+		model = create_vehicle_model(prefab),
+		_drivetrain = config.drivetrain,
+		_chassis = nil,
+
+		_input_object = Input.new(),
+		_camera_object = Camera.new(), --TODO: PASS IN CAMERA ATTACHMENTS
+
+		_max_downforce = config, -- TODO: GET CONFIG INDEX IN NEWTONS
+		_downforce_percentage = config, -- TODO: ABOVE
+	}, Vehicle)
 	
-	self.model = create_vehicle_model(prefab)
-	self._drivetrain = config.drivetrain -- TODO: maybe remove
 	self._chassis = self.model.chassis:FindFirstChild("chassis_part")
 	
-	self.components = {}
-	for _, component in pairs(config.components) do
-		if allowed_types[component.__type] ~= nil then
-			self.components[component]
-		end
-	end
-
 	self.engine = Engine.new(self, config.engine)
-	self.generator = config.generator and Generator.new(self, config.generator) or nil
+	self.electric_motor = config.electric_motor and Engine.new(self, config.electric_motor) or nil
 	self.turbocharger = config.turbocharger and Turbocharger.new(self, config.turbocharger) or nil
 	self.gearbox = Gearbox.new(self, config.gearbox)
-	self.front_axle = Axle.new(self, Enums.AxleType.Front)
-	self.rear_axle = Axle.new(self, Enums.AxleType.Rear)
+	self.front_axle = Axle.new(self, config.axle)
+	self.rear_axle = Axle.new(self, config.axle)
 	self.steering_column = SteeringColumn.new(self, config.steering_column)
 	self.wheels = {}
-	for wheel_name, wheel_part in pairs(wheels) do
-		self.wheels[wheel_name] = Wheel.new(self, wheel_part, config.wheels)
+	
+	for _, wheel_part in pairs(self.model:WaitForChild("chassis").wheels) do
+		self.wheels[wheel_part.Name] = Wheel.new(self, wheel_part, config.wheels)
 	end
-	
-	self._input_object = Input.new()
-	self._camera_object = Camera.new() --TODO: PASS IN CAMERA ATTACHMENTS
-	
-	self._max_downforce = config -- TODO: GET CONFIG INDEX IN NEWTONS
-	self._downforce_percentage = config -- TODO: ABOVE
-	
+
 	self:bind_objects(self._input_object, self._camera_object)
 	return self
 end
 
 function Vehicle.bind_objects(self: Vehicle, input_object: Input.Input, camera_object: Camera.Camera): ()
-	local vehicle_seat = self.model:FindFirstDescendant("driver_seat") -- change this to driveseat maybe to allow for multiple seats?
+	local vehicle_seat = self.model:FindFirstDescendant("driver_seat")
 	
 	local connection
 	vehicle_seat:GetPropertyChangedSignal("Occupant"):Connect(function()
@@ -841,22 +643,27 @@ function Vehicle.destroy(self: Vehicle): ()
 		occupant.Parent:FindFirstChild("Humanoid").Jump = true
 	end
 	
-	self.model:Destroy()
-	self.model = nil
-	self._drivetrain = nil
-	self._chassis = nil
-	
-	self._max_downforce = nil
-	self._downforce_percentage = nil
-	
-	for _, component in pairs(self.components) do
-		component:destroy()
+	local function clear_object(object: {}): ()
+		if object.destroy() then
+			object:destroy()
+		end
 	end
 	
-	self._input_object:destroy()
-	self._camera_object:destroy()
-	self._input_object = nil
-	self._camera_object = nil
+	for k, v in pairs(self) do
+		if typeof(v) == "Model" then
+			v:Destroy()
+		end
+		if typeof(v) == "table" then
+			clear_object(v)
+		end
+		if v == self.wheels then
+			for _, wheel in pairs(self.wheels) do
+				clear_object(wheel)
+			end
+		end
+		
+		self[k] = nil
+	end
 end
 
 return Vehicle
