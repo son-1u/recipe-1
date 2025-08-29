@@ -49,7 +49,7 @@ function BaseComponent.new(vehicle: Vehicle, component_properties: {}): BaseComp
 	return self
 end
 
-function BaseComponent.get_health(self: BaseComponent): number,
+function BaseComponent.get_health(self: BaseComponent): number
 	return self._health
 end
 
@@ -80,6 +80,7 @@ type Engine = BaseComponent & typeof(setmetatable({} :: {
 	_torque: number,
 	_min_torque: number,
 	_max_torque: number,
+	_redline_torque: number,
 	_horsepower: number,
 	_max_horsepower: number,
 
@@ -102,6 +103,7 @@ function Engine.new(vehicle: Vehicle, config: {}): Engine
 		_torque = 0,
 		_min_torque = config.min_torque, -- Idle torque
 		_max_torque = config.max_torque, -- Peak torque
+		_redline_torque = config.redline_torque,
 		_horsepower = 0,
 		_max_horsepower = config.max_horsepower,
 	}), Engine)
@@ -114,6 +116,49 @@ end
 
 function Engine.get_rpm(self: Engine): number
 	return self._rpm
+end
+
+--- Calculate Quadratic Bezier Curve
+-- rpm: number, to be converted to t (time) between 0-1
+-- p0: number, start point
+-- p1: number, control point, defines the curve
+-- p2: number, end point
+local function calculate_quadratic_bezier_curve(rpm: number, p0: {x: number, y: number}, p1: {x: number, y: number}, p2: {x: number, y: number}): number
+	-- To use the x value (rpm), we need to convert x to t
+	local function solve_quadratic(a: number, b: number, c: number): (number, number)
+		local discriminant = b^2 - 4*a*c
+		if discriminant < 0 then
+			return nil -- Imaginary number
+		end
+		
+		local sqrt_discriminant = math.sqrt(discriminant)
+		return (-b + sqrt_discriminant)/(2 * a), (-b - sqrt_discriminant)/(2 * a) -- Return both the positive and negative solutions
+	end
+	
+	-- Rearrange quad bezier formula to standard form quadratic: t²(x₀ - 2x₁ + x₂) + t(-2x₀ + 2x₁) + (x₀ - x(t)) = 0
+	local a = p0.x - 2*p1.x + p2.x -- apparently google says to check if this is zero to avoid an invalid divisor when dividing by 2a
+	local b = 2*p1.x - 2*p0.x
+	local c = p0.x - rpm
+	
+	local t1, t2 = solve_quadratic(a, b, c)
+	local t = nil
+	
+	for _, solution in ipairs({t1, t2}) do
+		if solution == nil then
+			continue
+		end
+		
+		if 0 <= solution and solution <= 1 then
+			t = solution
+			break
+		end
+	end
+	if not t then
+		return nil
+	end
+	
+	-- Torque corresponding to the y axis, so use y-coordinates of points to calculate
+	return (1 - t)^2 * p0.y + 2*(1 - t)*t * p1.y + t^2 * p2.y
 end
 
 function Engine.update(self: Engine, throttle: number, engine_boost: number?, dt: number): (number, number)
@@ -135,13 +180,6 @@ function Engine.update(self: Engine, throttle: number, engine_boost: number?, dt
 		end
 	end
 
-	--- RPM Calculation
-	-- Uses an exponential curve (faster rise near min rpm, tapers off near max rpm)
-	-- Formula: min + (max - min) * (throttle ^ power)
-	-- Power is the sharpness of the rpm rise
-	-- Power = 1 (linear rise)
-	-- Power < 1 (faster early rise, slower near the top)
-	-- Power > 1 (slower early rise, faster near the top)
 	local target_rpm = 0
 	if throttle == 0 then
 		target_rpm = 0
@@ -155,7 +193,10 @@ function Engine.update(self: Engine, throttle: number, engine_boost: number?, dt
 	-- 0.5 = two seconds, 1 = one second, 2 = half a second
 	self._rpm = math.clamp(lerp(self._rpm, target_rpm, 0.45 * dt), 0, self._max_rpm)
 	
-	self._torque = math.clamp(self._rpm <= 7000 and (0.03 * self._rpm) + 90 or (-0.025 * self._rpm) + 475, self._min_torque, self._max_torque)
+	self._torque = calculate_quadratic_bezier_curve(
+		math.map(self._rpm, 0, self._max_rpm, 0, 1), -- inmin is 0 because the graph starts at 0, so gotta calculate from there
+		self._min_torque, self._max_torque, self._redline_torque
+	)
 	return self._rpm, self._torque
 end
 
@@ -200,7 +241,7 @@ function ElectricMotor.get_rpm(self: ElectricMotor): number
 	return self._rpm
 end
 
-function ElectricMotor.update(self: ElectricMotor, dt: number): (number, number)
+function ElectricMotor.update(self: ElectricMotor, throttle: number, dt: number): (number, number)
 	
 end
 
@@ -341,6 +382,7 @@ SteeringColumn.__index = SteeringColumn
 type SteeringColumn = BaseComponent & typeof(setmetatable({} :: {
 	_steering_angle: number,
 	_max_steering_angle: number,
+	_steering_speed: number,
 
 	new: (vehicle: Vehicle, config: {}) -> SteeringColumn,
 	update: (self: SteeringColumn, steer_float: number, dt: number) -> number,
@@ -350,6 +392,7 @@ function SteeringColumn.new(vehicle: Vehicle, config: {}): SteeringColumn
 	return setmetatable(BaseComponent.new(vehicle, {
 		_steering_angle = 0,
 		_max_steering_angle = config.max_steering_angle,
+		_steering_speed = config.steering_speed,
 	}), SteeringColumn)
 end
 
@@ -359,7 +402,7 @@ function SteeringColumn.update(self: SteeringColumn, steer_float: number, dt: nu
 	end
 
 	local target_angle = steer_float * self._max_steering_angle
-	self._steering_angle = lerp(self._steering_angle, target_angle, 0.2 * dt)
+	self._steering_angle = lerp(self._steering_angle, target_angle, self._steering_speed * dt)
 	return self._steering_angle
 end
 
@@ -410,7 +453,7 @@ function Wheel.change_wheel(self: Wheel, compound: Enums.TireCompound)
 	self._traction = 0 -- TODO: replace with a dictionary lookup of default tractions?
 	self._health = 100
 	self._stress = 0
-	self._temperature = 15 -- We could probably get the temperature from whatever weather control system nate has, convert to C
+	self._temperature = workspace:GetAttribute("GlobalTemperature") or 20 -- We could probably get the temperature from whatever weather control system nate has, convert to C
 
 	-- I guess I should update the tire model in here?
 end
@@ -428,6 +471,8 @@ end
 function Wheel.get_tire_diameter(self: Wheel): number
 	return self.wheel.Size.Y
 end
+
+local function measure_tire_stress(self: Wheel): number
 
 local params = RaycastParams.new()
 params.FilterType = Enum.RaycastFilterType.Include
