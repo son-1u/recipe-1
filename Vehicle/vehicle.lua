@@ -6,14 +6,20 @@ for different type of cars.
 -------------------------------SERVICES-------------------------------
 
 local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
 local Players = game:GetService("Players")
 
 --------------------------------IMPORTS-------------------------------
 
-local Enums = require(script.Enums)
-local Signal = require(script.Signal)
-local Input = require(script.Input)
-local Camera = require(script.Camera)
+local Enums = require(script.utils.enums)
+local Signal = require(script.utils.Signal)
+
+local HUD = require(script.internal_objects.hud)
+local Input = require(script.internal_objects.input)
+local Camera = require(script.internal_objects.camera)
+
+--local create_vehicle_model = require(script.utils.create_vehicle_model)
 
 ---------------------------INTERNAL CLASSES---------------------------
 
@@ -73,16 +79,17 @@ local Engine = setmetatable({}, BaseComponent)
 Engine.__index = Engine
 
 type Engine = BaseComponent & typeof(setmetatable({} :: {
+	_engine_inertia: number,
 	_idle_throttle: number,
 	_rpm: number,
 	_min_rpm: number,
 	_max_rpm: number,
+	_max_torque_rpm: number,
 	_torque: number,
 	_min_torque: number,
 	_max_torque: number,
 	_redline_torque: number,
 	_horsepower: number,
-	_max_horsepower: number,
 
 	new: (vehicle: Vehicle, config: {}) -> Engine,
 	get_torque: (self: Engine) -> number,
@@ -96,16 +103,17 @@ end
 
 function Engine.new(vehicle: Vehicle, config: {}): Engine
 	return setmetatable(BaseComponent.new(vehicle, {
+		_engine_inertia = config.engine_inertia,
 		_idle_throttle = config.idle_throttle,
 		_rpm = 0,
 		_min_rpm = config.min_rpm, -- Idle RPM
 		_max_rpm = config.max_rpm, -- Redline
+		_max_torque_rpm = config.peak_torque_rpm,
 		_torque = 0,
 		_min_torque = config.min_torque, -- Idle torque
 		_max_torque = config.max_torque, -- Peak torque
 		_redline_torque = config.redline_torque,
 		_horsepower = 0,
-		_max_horsepower = config.max_horsepower,
 	}), Engine)
 end
 
@@ -123,40 +131,16 @@ end
 -- p0: number, start point
 -- p1: number, control point, defines the curve
 -- p2: number, end point
-local function calculate_quadratic_bezier_curve(rpm: number, p0: {x: number, y: number}, p1: {x: number, y: number}, p2: {x: number, y: number}): number
-	-- To use the x value (rpm), we need to convert x to t
-	local function solve_quadratic(a: number, b: number, c: number): (number, number)
-		local discriminant = b^2 - 4*a*c
-		if discriminant < 0 then
-			return nil -- Imaginary number
-		end
-		
-		local sqrt_discriminant = math.sqrt(discriminant)
-		return (-b + sqrt_discriminant)/(2 * a), (-b - sqrt_discriminant)/(2 * a) -- Return both the positive and negative solutions
-	end
+local function calculate_quadratic_bezier_curve(rpm: number, max_rpm: number, p0: {x: number, y: number}, curve_peak: {x: number, y: number}, p2: {x: number, y: number}): number
+	-- Calculate p1 based off of p0, p2, and t
+	local p1 = {x = nil, y = nil}
 	
-	-- Rearrange quad bezier formula to standard form quadratic: t²(x₀ - 2x₁ + x₂) + t(-2x₀ + 2x₁) + (x₀ - x(t)) = 0
-	local a = p0.x - 2*p1.x + p2.x -- apparently google says to check if this is zero to avoid an invalid divisor when dividing by 2a
-	local b = 2*p1.x - 2*p0.x
-	local c = p0.x - rpm
-	
-	local t1, t2 = solve_quadratic(a, b, c)
-	local t = nil
-	
-	for _, solution in ipairs({t1, t2}) do
-		if solution == nil then
-			continue
-		end
-		
-		if 0 <= solution and solution <= 1 then
-			t = solution
-			break
-		end
-	end
-	if not t then
-		return nil
-	end
-	
+	local curve_peak_t = curve_peak.x / max_rpm
+	local denominator = 2*curve_peak_t*(1 - curve_peak_t)
+	p1.x = (curve_peak.x - (1 - curve_peak_t)^2 * p0.x - curve_peak_t^2 * p2.x) / denominator
+	p1.y = (curve_peak.y - (1 - curve_peak_t)^2 * p0.y - curve_peak_t^2 * p2.y) / denominator
+
+	local t = rpm / max_rpm
 	-- Torque corresponding to the y axis, so use y-coordinates of points to calculate
 	return (1 - t)^2 * p0.y + 2*(1 - t)*t * p1.y + t^2 * p2.y
 end
@@ -187,16 +171,24 @@ function Engine.update(self: Engine, throttle: number, engine_boost: number?, dt
 		target_rpm = self._max_rpm
 	end
 	
-	--- Smoothing the RPM
-	-- For the third argument, the numerical value multiplied by deltatime is the rpm acceleration rate from min rpm to max rpm
-	-- The smaller the number, the longer it takes
-	-- 0.5 = two seconds, 1 = one second, 2 = half a second
-	self._rpm = math.clamp(lerp(self._rpm, target_rpm, 0.45 * dt), 0, self._max_rpm)
-	
-	self._torque = calculate_quadratic_bezier_curve(
-		math.map(self._rpm, 0, self._max_rpm, 0, 1), -- inmin is 0 because the graph starts at 0, so gotta calculate from there
-		self._min_torque, self._max_torque, self._redline_torque
+	-- Some random formula ChatGPT gave me for semi-realistic RPM delta. 9.55 is the result of 60/(2pi)
+	self._rpm = math.clamp(
+		(self._rpm + ((self._torque * math.abs(throttle)) / self._engine_inertia) * dt * 9.55),
+		self._min_rpm,
+		self._max_rpm
 	)
+	self._torque = math.clamp(
+		calculate_quadratic_bezier_curve(
+			self._rpm,
+			self._max_rpm,
+			{x = 0, y = 0},
+			{x = self._max_torque_rpm, y = self._max_torque},
+			{x = self._max_rpm, y = self._redline_torque}
+		) * (self._health / 100),
+		0,
+		self._max_torque
+	)
+	self._horsepower = (self._rpm * self._torque) / 7217
 	return self._rpm, self._torque
 end
 
@@ -206,13 +198,14 @@ local ElectricMotor = setmetatable({}, BaseComponent)
 ElectricMotor.__index = ElectricMotor
 
 type ElectricMotor = BaseComponent & typeof(setmetatable({} :: {
+	_motor_inertia: number,
 	_rpm: number,
 	_max_rpm: number,
 	_torque: number,
 	_min_torque: number,
 	_max_torque: number,
+	_torque_curve_coefficient: number,
 	_kilowatts: number,
-	_max_kilowatts: number,
 	
 	new: (vehicle: Vehicle, config: {}) -> ElectricMotor,
 	get_torque: (self: ElectricMotor) -> number,
@@ -222,13 +215,14 @@ type ElectricMotor = BaseComponent & typeof(setmetatable({} :: {
 
 function ElectricMotor.new(vehicle: Vehicle, config: {}): ()
 	return setmetatable(BaseComponent.new(vehicle, {
+		_motor_inertia = config.motor_inertia,
 		_rpm = 0,
 		_max_rpm = config.max_rpm,
 		_torque = 0,
 		_min_torque = config.min_torque,
 		_max_torque = config.max_torque,
+		_torque_curve_coefficient = config.torque_curve_coefficient,
 		_kilowatts = 0,
-		_max_kilowatts = config.max_kilowatts,
 	}), ElectricMotor)
 end
 
@@ -242,7 +236,27 @@ function ElectricMotor.get_rpm(self: ElectricMotor): number
 end
 
 function ElectricMotor.update(self: ElectricMotor, throttle: number, dt: number): (number, number)
+	if self._health <= 0 then
+		if self._rpm > 0 then
+			self._rpm = 0
+		end
+		if self._torque > 0 then
+			self._torque = 0
+		end
+		return self._rpm, self._torque
+	end
 	
+	-- Some random formula ChatGPT gave me for semi-realistic RPM delta. 9.55 is the result of 60/(2pi)
+	self._rpm = math.clamp(
+		(self._rpm + ((self._torque * math.abs(throttle)) / self._motor_inertia) * dt * 9.55),
+		self._min_rpm,
+		self._max_rpm
+	)
+	self._torque = math.min(
+		self._torque_curve_coefficient * (self._rpm - self._max_rpm)^2 + self._min_torque,
+		self._max_torque
+	)
+	self._kilowatts = (self._rpm * self._torque) / 9549
 end
 
 --------------------------TURBOCHARGER CLASS--------------------------
@@ -265,10 +279,6 @@ function Turbocharger.new(vehicle: Vehicle, config): Turbocharger
 	}), Turbocharger)
 end
 
-function Turbocharger.get_boost(self: Turbocharger): number
-	return self._boost
-end
-
 function Turbocharger.update(self: Turbocharger, dt: number): ()
 	
 end
@@ -281,10 +291,10 @@ Gearbox.__index = Gearbox
 type Gearbox = BaseComponent & typeof(setmetatable({} :: {
 	_gear: number,
 	_gear_ratios: {number},
-	_final_drive: number,
-	_transmission: number,
+	_final_drive_ratio: number,
 	_max_gear_rpms: {number},
 	_shift_time: number,
+	gear_changed_event: Signal,
 
 	new: (vehicle: Vehicle, config: {}) -> Gearbox,
 	shift: (self: Gearbox, direction: Enums.GearShiftDirection) -> (),
@@ -296,10 +306,10 @@ function Gearbox.new(vehicle: Vehicle, config: {}): Gearbox
 	return setmetatable(BaseComponent.new(vehicle, {
 		_gear = 1,
 		_gear_ratios = config.gear_ratios,
-		_final_drive = config.final_drive,
-		_transmission = config.transmission,
-		_max_gear_rpms = {},
+		_final_drive_ratio = config.final_drive_ratio,
+		_max_gear_rpms = config.max_gear_rpms,
 		_shift_time = config.shift_time,
+		gear_changed_event = Signal.new()
 	}), Gearbox)
 end
 
@@ -307,19 +317,25 @@ function Gearbox.shift(self: Gearbox, direction: Enums.GearShiftDirection): ()
 	if self._health <= 0 then
 		return
 	end
+	if self._gear == 0 or self._gear == #self._gear_ratios then
+		return
+	end
+	
+	local shift_delay = self._shift_time * (1 + (1 - (self:get_health() / 100)))
+	task.delay(shift_delay, function()
+		if direction ~= Enums.GearShiftDirection.Down then
+			return
+		end
+		
+		local engine_rpm = self._vehicle.engine:get_rpm()
+		if engine_rpm > self._max_gear_rpms[self._gear - 1] then
+			local difference = engine_rpm - self._max_gear_rpms
+			self._health = math.min(0.002 * difference, 20)
+		end
+	end)
 	
 	self._gear += direction
-	local engine_rpm = self._vehicle.engine:get_rpm()
-	if direction == Enums.GearShiftDirection.Up then
-		if engine_rpm < self._max_gear_rpms[self._gear] then
-			
-		end
-	elseif direction == Enums.GearShiftDirection.Down then
-		if engine_rpm > self._max_gear_rpms[self._gear + 1] then
-			
-		end
-		--if self._vehicle.engine
-	end
+	self.gear_changed_event:Fire(self._gear)
 end
 
 function Gearbox.get_gear(self: Gearbox): number
@@ -327,19 +343,13 @@ function Gearbox.get_gear(self: Gearbox): number
 end
 
 function Gearbox.update(self: Gearbox, engine_rpm: number, engine_torque: number): (number, number)
-	if self._health <= 0 then
-		return -- Is this even valid? I'm pretty sure if a gearbox is broken, it just can't change gears
+	if self._gear == 0 then
+		return 0, 0
 	end
 	
-	local shift_delay = self._shift_time * (1 + (1 - self:get_health()))
-	-- Add in gear slip
-	if self._transmission == Enums.Transmission.Automatic then
-		
-	elseif self._transmission == Enums.Transmission.Manual then
-		local gearbox_rpm = engine_rpm / self._gear_ratios[self._gear]
-		local gearbox_torque = engine_torque * self._gear_ratios[self._gear] -- Newton-meter (Nm)
-		return gearbox_rpm, gearbox_torque
-	end
+	local gearbox_rpm = engine_rpm / self._gear_ratios[self._gear]
+	local gearbox_torque = engine_torque * self._gear_ratios[self._gear] -- Newton-meter (Nm)
+	return gearbox_rpm, gearbox_torque
 end
 
 ------------------------------AXLE CLASS------------------------------
@@ -352,6 +362,16 @@ type Axle = BaseComponent & typeof(setmetatable({} :: {
 
 	new: (vehicle: Vehicle, connected_wheels: {Wheel}) -> Axle,
 }, Axle))
+
+local function break_joints(part: BasePart): ()
+	for _, joint: WeldConstraint in pairs(part:GetJoints()) do
+		if joint.Part1 ~= part then
+			return
+		end
+		
+		joint:Destroy()
+	end
+end
 
 function Axle.new(vehicle: Vehicle, connected_wheels: {Wheel}): Axle	
 	local self = setmetatable(BaseComponent.new(vehicle, {
@@ -366,8 +386,8 @@ function Axle.new(vehicle: Vehicle, connected_wheels: {Wheel}): Axle
 			return
 		end
 		
-		for _, wheel in pairs(self._connected_wheels) do
-			-- TODO: BREAK WHEEL CONNECTION
+		for _, wheel: Wheel in pairs(self._connected_wheels) do
+			break_joints(wheel.wheel)
 		end
 	end)
 	
@@ -401,31 +421,41 @@ function SteeringColumn.update(self: SteeringColumn, steer_float: number, dt: nu
 		return self._steering_angle
 	end
 
-	local target_angle = steer_float * self._max_steering_angle
+	local target_angle = steer_float * 0.5 -- TODO: REPLACE THIS WITH ACTUAL TARGETLIMIT --* self._max_steering_angle
 	self._steering_angle = lerp(self._steering_angle, target_angle, self._steering_speed * dt)
 	return self._steering_angle
 end
 
 -----------------------------WHEEL CLASS------------------------------
 
-local Wheel = setmetatable({}, BaseComponent)
+local Wheel = setmetatable({
+	_AMBIENT_TEMPERATURE = workspace:GetAttribute("GlobalTemperature"),
+}, BaseComponent)
 Wheel.__index = Wheel
+
+local temperature_change = ReplicatedStorage.RemoteEvents.temperature_change
+temperature_change.OnClientEvent:Connect(function(temperature: number)
+	Wheel._AMBIENT_TEMPERATURE = temperature
+end)
 
 type Wheel = BaseComponent & typeof(setmetatable({} :: {
 	wheel: BasePart,
 	is_front: boolean,
 	_tire_compound: number,
-	_traction: number,
+	_tractions: {[Enum.Material]: number},
 	_temperature: number,
+	_overheating_temperature: number,
+	_heating_rate: number,
+	_cooling_rate: number,
 	_stress: number,
+	_base_wear_rate: number,
 
 	new: (vehicle: Vehicle, chassis_part: BasePart, wheel_part: BasePart, config: {}) -> Wheel,
-	get_traction: (self: Wheel) -> number,
-	update_traction: (self: Wheel, traction: number) -> (),
 	change_wheel: (self: Wheel, compound: Enums.TireCompound) -> (),
 	get_wheel_speed: (self: Wheel) -> number,
-	get_tire_diameter: (self: Wheel) -> number,
-	update: (self: Wheel, dt: number) -> {number},
+	get_wheel_radius: (self: Wheel) -> number,
+	get_stress: (self: Wheel) -> number,
+	update: (self: Wheel, dt: number) -> (),
 }, Wheel))
 
 function Wheel.new(vehicle: Vehicle, chassis_part: BasePart, wheel_part: BasePart, config: {}): Wheel	
@@ -434,26 +464,21 @@ function Wheel.new(vehicle: Vehicle, chassis_part: BasePart, wheel_part: BasePar
 		is_front = -chassis_part.CFrame:PointToObjectSpace(wheel_part.Position).Z > 0,
 		tire_model = config.tire_model,
 		tire_compound = config.default_tire_compound,
-		_traction = config.default_traction,
-		_temperature = workspace:GetAttribute("GlobalTemperature") or 20,
+		_temperature = Wheel._AMBIENT_TEMPERATURE or 20,
+		_overheating_temperature = config.overheating_temperature,
+		_heating_rate = config.heating_rate,
+		_cooling_rate = config.cooling_rate,
 		_stress = 0,
+		_base_wear_rate = config.base_wear_rate,
 	}), Wheel)
 end
 
-function Wheel.get_traction(self: Wheel): number
-	return self._traction
-end
-
-function Wheel.update_traction(self: Wheel, traction: number): ()
-	self._traction = traction
-end
-
-function Wheel.change_wheel(self: Wheel, compound: Enums.TireCompound)
+function Wheel.change_wheel(self: Wheel, compound: Enums.TireCompound): ()
 	self._tire_compound = compound
 	self._traction = 0 -- TODO: replace with a dictionary lookup of default tractions?
 	self._health = 100
 	self._stress = 0
-	self._temperature = workspace:GetAttribute("GlobalTemperature") or 20 -- We could probably get the temperature from whatever weather control system nate has, convert to C
+	self._temperature = Wheel._AMBIENT_TEMPERATURE or 20 -- We could probably get the temperature from whatever weather control system nate has, convert to C
 
 	-- I guess I should update the tire model in here?
 end
@@ -465,29 +490,86 @@ function Wheel.get_wheel_speed(self: Wheel): number
 	-- Compare it to the axis of rotation (to avoid change in camber affecting the speed)
 	-- Multiply by the radius
 	-- Return the absolute value to avoid a negative speed
-	return math.abs(self.wheel.AssemblyAngularVelocity:Dot(self.wheel.CFrame.RightVector) * (self:get_tire_diameter() / 2))
+	return math.abs(self.wheel.AssemblyAngularVelocity:Dot(self.wheel.CFrame.RightVector) * self:get_wheel_radius())
 end
 
-function Wheel.get_tire_diameter(self: Wheel): number
-	return self.wheel.Size.Y
+function Wheel.get_wheel_radius(self: Wheel): number
+	return self.wheel.Size.Y / 2
 end
+
+function Wheel.get_stress(self: Wheel): number
+	return self._stress
+end
+
+--[[
+local pacejka_tire_slip_magic_constants = {
+	["dry"] = {
+		b = 10,
+		c = 1.9,
+		d = 1,
+		e = 0.97,
+	},
+	["wet"] = {
+		b = 12,
+		c = 2.3,
+		d = 0.82,
+		e = 1
+	},
+}
+
+local function calculate_tire_slip(self: Wheel, surface_normal: Vector3): number
+	local vehicle_mass_on_tire = self._vehicle.chassis.AssemblyMass
+		* (self.is_front and self._vehicle.mass_distribution or 1 - self._vehicle.mass_distribution) / 2 -- Only supports two tires ont he front, need to edit this if other types are wanted
+	local normal_force = (vehicle_mass_on_tire + self._vehicle.downforce)
+		* workspace.Gravity
+		* math.cos(math.acos(surface_normal:Dot(Vector3.yAxis)))
+	
+	
+	local f_x = normal_force * d * math.sin(c * math.atan(b - e * (b - math.atan(b))))
+end
+]]
 
 local function measure_tire_stress(self: Wheel): number
+	-- Calculate slip ratio (longitudinal slip)
+	local vehicle_speed = self._vehicle:get_real_speed()
+	
+	local wheel_speed = self.get_wheel_speed()
+	local slip_ratio = (vehicle_speed.Z - wheel_speed) / math.max(vehicle_speed.Z, wheel_speed, 0.001) -- Add in 0.001 to avoid dividing by 0
+	
+	-- Calculate slip angle (lateral slip)
+	local wheel_local_space = self._vehicle.chassis.CFrame:VectorToObjectSpace(self.wheel.CFrame.LookVector)
+	local steering_angle = math.atan2(wheel_local_space.X, wheel_local_space.Z + 0.001)
+	local slip_angle = math.atan2(vehicle_speed.X, vehicle_speed.Z + 0.001) - steering_angle
+	local normalized_slip_angle = 1 - math.exp(-math.abs(math.deg(slip_angle)) / 10)
+	
+	-- Range of 0-100
+	return (math.sqrt((slip_ratio)^2 + (normalized_slip_angle)^2) / math.sqrt(2)) * 100
+end
 
-local params = RaycastParams.new()
-params.FilterType = Enum.RaycastFilterType.Include
-params.CollisionGroup = "Car"
-function Wheel.update(self: Wheel, dt: number): {number}
-	local result = workspace:Raycast(self.wheel.Position, Vector3.new(0, -1, 0), params)
-	if result.Material ~= Enum.Material.Concrete then
-		self:change_health(-1 * dt) -- Update this to take into account tire compound
+function Wheel.update(self: Wheel, dt: number): ()
+	if self._health <= 0 then
+		return
 	end
-
-	-- update stress
-	-- update friction
-	-- update wear
-	-- update temperature
-	-- update health
+	
+	local result = workspace:Raycast(self.wheel.Position + (self.wheel.Size.Y / 2), Vector3.new(0, 1, 0))
+	if not result then
+		return
+	end
+	
+	self.wheel.CustomPhysicalProperties.Friction = self._tractions[result.Material] * 2
+	self._stress = measure_tire_stress(self)
+	
+	local stress_heat = (self._stress ^ 1.5) * self._tractions[Enum.Material] * self._heating_rate
+	local heat_cooling = (self._temperature - Wheel._AMBIENT_TEMPERATURE) * self._cooling_rate
+	self._temperature += (stress_heat - heat_cooling) * dt
+	
+	local stress_wear = (self._stress ^ 1.2) * self._base_wear_rate
+	local temperature_wear = self._temperature > self._overheating_temperature
+		and (self._temperature - self._overheating_temperature) * self._base_wear_rate
+		or 0
+	self._health = math.clamp(self._health - (stress_wear + temperature_wear), 0, 100)
+	
+	self.health_changed:Fire(self._health)
 end
 
 ------------------------------MAIN CLASS------------------------------
@@ -496,119 +578,107 @@ local Vehicle = {}
 Vehicle.__index = Vehicle
 
 export type Vehicle = typeof(setmetatable({} :: {
-	components: {
-		engine: Engine,
-		generator: Generator?,
-		turbocharger: Turbocharger?,
-		gearbox: Gearbox,
-		front_axle: Axle,
-		rear_axle: Axle,
-		steering_column: SteeringColumn,
-		wheels: {Wheel},
-	},
-	_max_downforce: number,
-	_downforce_percentage: number,
-	model: Model,
+	engine: Engine,
+	generator: Generator?,
+	turbocharger: Turbocharger?,
+	gearbox: Gearbox,
+	front_axle: Axle,
+	rear_axle: Axle,
+	steering_column: SteeringColumn,
+	wheels: {Wheel},
 	_drivetrain: Enums.Drivetrain,
-	_chassis: BasePart,
+	
+	model: Model,
+	chassis: BasePart,
+	_vehicle_mass: number,
+	mass_distribution: number,
+	
+	_downforce_object: VectorForce?,
+	downforce: number?,
+	_max_downforce: number?,
+	_downforce_coefficient: number?,
+	_downforce_percentage: number?,
+	
+	_slipstream_object: VectorForce?,
+	_slipstream_max_force: number,
+	_slipstream_decay_rate: number,
+	_slipstream_decay_midpoint: number,
+	
 	_input_object: Input.Input,
 	_camera_object: Camera.Camera,
 
 	new: (prefab: Model, spawn_position: CFrame, config: {}) -> Vehicle,
 	get_wheel_speed: (self: Vehicle) -> number,
-	get_real_speed: (self: Vehicle) -> number,
+	get_real_speed: (self: Vehicle) -> Vector3,
 	is_flipped: (self: Vehicle) -> boolean,
 	update: (self: Vehicle, values: {number}, dt: number) -> (),
 	destroy: (self: Vehicle) -> (),
 }, Vehicle))
 
-local function create_vehicle_model(prefab: Model, spawn_position: CFrame, config): Model
-	local vehicle = prefab:Clone()
-	local chassis_part = vehicle.chassis.chassis_part
-	
-	-- Weight
-	local weight_brick_front = vehicle.chassis:FindFirstChild("weight_brick_front")
-	weight_brick_front.CustomPhysicalProperties = true
-	weight_brick_front.CustomPhysicalProperties.Density = config.vehicle_weight * config.weight_distribution
-	local weight_brick_rear = vehicle.chassis:FindFirstChild("weight_brick_rear")
-	weight_brick_rear.CustomPhysicalProperties = true
-	weight_brick_rear.CustomPhysicalProperties.Density = config.vehicle_weight * (1 - config.weight_distribution)
-	
-	-- Wheels
-	for _, wheel in pairs(vehicle.Chassis.Wheels:GetChildren()) do
-		if not wheel:IsA("BasePart") then
-			return
-		end
-		if wheel.Parent.Name ~= "Wheels" then -- bad hardcoding!! 
-			return
-		end
-
-		-- TODO: is_front and wheel_side currently has no support for CFrames that have the same CFrame as ChassisPart
-		local is_front: boolean = -chassis_part.CFrame:PointToObjectSpace(wheel.Position).Z > 0
-		local wheel_side: number = chassis_part.CFrame:PointToObjectSpace(wheel.Position).X > 0 and 1 or -1 -- Right = 1, Left = -1
-		local wheel_caster = is_front and config.WheelAlignment.FCaster or config.WheelAlignment.RCaster
-		local wheel_toe = is_front and config.WheelAlignment.FToe or config.WheelAlignment.RToe
-		local wheel_camber = is_front and config.WheelAlignment.FCamber or config.WheelAlignment.RCamber
-
-		wheel.CFrame = wheel.CFrame * CFrame.Angles(
-			math.rad(wheel_caster * wheel_side),
-			math.rad(wheel_toe * -wheel_side),
-			math.rad(wheel_caster)
-		)
+-- https://www.desmos.com/calculator/2m9taf3xz9
+-- Returns downforce as a negative value to be inputted into the +Y axis of a force object
+local function calculate_downforce(self: Vehicle): number
+	local vehicle_velocity = self:get_real_speed().Z
+	if vehicle_velocity <= 1 then
+		return 0
 	end
-	vehicle.Parent = workspace
-	vehicle.PrimaryPart.CFrame = spawn_position
 	
-	-- Unanchor
-	for _, descendant in pairs(vehicle:GetDescendants()) do
-		if descendant:IsA("BasePart") then
-			descendant.Anchored = false
-		end
-	end
-end
-
-local function update_downforce(self: Vehicle, chassis_part: Part, downforce_object: VectorForce): ()
-	local normalized_velocity = chassis_part.AssemblyLinearVelocity.Unit
-	local downforce_factor = normalized_velocity:Dot(chassis_part.CFrame.RightVector.Unit)
-	local downforce = 0
-	if downforce_factor ~= -1 then -- Going forward
-		local downforce_mapped_to_speed = chassis_part.AssemblyLinearVelocity.Magnitude * downforce_curve_value
-		downforce = downforce_mapped_to_speed * self._max_downforce * -chassis_part.CFrame.UpVector
-	end
+	local downforce = self._downforce_coefficient * (vehicle_velocity)^2
 	
 	--- Convert newtons to rowtons
 	-- 1 newton = 0.163 rowtons
-	downforce_object.Force.Y = math.min((downforce / 0.163) * self._downforce_percentage, self._max_downforce)
+	return math.min((downforce * 0.163) * self._downforce_percentage, self._max_downforce)
+end
+
+-- https://www.desmos.com/calculator/p7nt9q6bya
+-- Returns slipstream as a negative value to be inputted into the +Z axis of a force object
+local slipstream_raycast_params = RaycastParams.new()
+slipstream_raycast_params.CollisionGroup = "Car"
+local function calculate_slipstream(self: Vehicle): number
+	local result = workspace:Raycast(self.chassis.Position + (self.chassis.Size.Z / 2), Vector3.new(0, 0, -250), slipstream_raycast_params)
+	if not result then
+		return 0
+	end
+	
+	local euler_value = math.exp(-self._slipstream_decay_rate * (result.Distance - self._slipstream_decay_midpoint))
+	return -(self._slipstream_max_force - (self._slipstream_max_force / (1 + euler_value))) * 0.163
 end
 
 function Vehicle.new(prefab: Model, spawn_position: CFrame, config: {}): Vehicle
 	local self = setmetatable({
-		model = create_vehicle_model(prefab),
+		model = prefab, -- create_vehicle_model(prefab), -- temporary using prefab until i find out how to efficiently run client rendering
 		_drivetrain = config.drivetrain,
-		_chassis = nil,
+		chassis = nil,
+		_vehicle_mass = config.vehicle_mass,
+		mass_distribution = config.mass_distribution,
 
+		downforce = 0,
+		_max_downforce = config.max_downforce or nil,
+		_downforce_coefficient = config.downforce_coefficient or nil,
+		_downforce_percentage = config.downforce_percentage or nil,
+		
 		_input_object = Input.new(),
-		_camera_object = Camera.new(), --TODO: PASS IN CAMERA ATTACHMENTS
-
-		_max_downforce = config, -- TODO: GET CONFIG INDEX IN NEWTONS
-		_downforce_percentage = config, -- TODO: ABOVE
 	}, Vehicle)
 	
-	self._chassis = self.model.chassis:FindFirstChild("chassis_part")
+	self.chassis = self.model:WaitForChild("chassis"):FindFirstChild("chassis_part")
+	self._downforce_object = self.model.constraints.forces:FindFirstChild("downforce") or nil
+	self._slipstream_object = self.model.constraints.forces:FindFirstChild("slipstream") or nil
 	
-	self.engine = Engine.new(self, config.engine)
-	self.electric_motor = config.electric_motor and Engine.new(self, config.electric_motor) or nil
-	self.turbocharger = config.turbocharger and Turbocharger.new(self, config.turbocharger) or nil
-	self.gearbox = Gearbox.new(self, config.gearbox)
-	self.front_axle = Axle.new(self, config.axle)
-	self.rear_axle = Axle.new(self, config.axle)
-	self.steering_column = SteeringColumn.new(self, config.steering_column)
 	self.wheels = {}
-	
-	for _, wheel_part in pairs(self.model:WaitForChild("chassis").wheels) do
+	for _, wheel_part in pairs(self.model.chassis.wheels) do
 		self.wheels[wheel_part.Name] = Wheel.new(self, wheel_part, config.wheels)
 	end
-
+	
+	self.engine = Engine.new(self, config.engine)
+	self.electric_motor = config.electric_motor and ElectricMotor.new(self, config.electric_motor) or nil
+	self.turbocharger = config.turbocharger and Turbocharger.new(self, config.turbocharger) or nil
+	self.gearbox = Gearbox.new(self, config.gearbox)
+	self.front_axle = Axle.new(self, {self.wheels["fl"], self.wheels["fr"]})
+	self.rear_axle = Axle.new(self, {self.wheels["rl"], self.wheels["rr"]}) -- TODO: do something about this hardcoding
+	self.steering_column = SteeringColumn.new(self, config.steering_column)
+	
+	self._camera_object = Camera.new(self.model.extras.cameras:GetChildren())
+	
 	self:bind_objects(self._input_object, self._camera_object)
 	return self
 end
@@ -616,7 +686,10 @@ end
 function Vehicle.bind_objects(self: Vehicle, input_object: Input.Input, camera_object: Camera.Camera): ()
 	local vehicle_seat = self.model:FindFirstDescendant("driver_seat")
 	
-	local connection
+	local hud
+	local mobile_controls
+	local stepped_connection
+	local render_stepped_connection
 	vehicle_seat:GetPropertyChangedSignal("Occupant"):Connect(function()
 		-- TODO: CAR ENTRY ANIMATION
 		
@@ -624,15 +697,33 @@ function Vehicle.bind_objects(self: Vehicle, input_object: Input.Input, camera_o
 			return -- I don't know if this is redundant, since client is rendering each car and creating events for them, don't want to control another person car, right?
 		end
 		
+		local speed, rpm, tachometer_bar_progress
 		if vehicle_seat.Occupant ~= nil then
-			connection = RunService.Stepped:Connect(function(_, dt: number)
-				local throttle, steer = self._input_object, 1 -- TODO: GET INPUT FROM INPUT METHOD
-				self:update({throttle, steer}, dt)
+			hud = HUD.new(Players.LocalPlayer, self.gearbox.gear_changed_event)
+			
+			--if UserInputService:GetLastInputType() == Enum.UserInputType.Touch then
+			--	mobile_controls = ReplicatedStorage.user_interface.mobile_controls:Clone()
+			--	mobile_controls.Parent = Players.LocalPlayer.PlayerGui
+			--end
+			
+			stepped_connection = RunService.Stepped:Connect(function(_, dt: number)
+				local throttle, steer = self._input_object:get_movement_vector()
+				speed, rpm, tachometer_bar_progress = self:update({throttle, steer}, dt)
 			end)
 			
+			render_stepped_connection = RunService.RenderStepped:Connect(function(dt: number)
+				hud:update(speed, rpm, tachometer_bar_progress, dt)
+			end)
+			
+			input_object:enable()
 			camera_object:enable()
 		else
-			if connection ~= nil then connection:Disconnect() end
+			if hud then hud:destroy() end
+			--if mobile_controls then mobile_controls:destroy() end
+			
+			if stepped_connection then stepped_connection:Disconnect() end
+			if render_stepped_connection then render_stepped_connection:Disconnect() end
+			input_object:disable()
 			camera_object:disable()
 		end
 	end)
@@ -641,26 +732,38 @@ end
 function Vehicle.get_wheel_speed(self: Vehicle): number
 	local total_wheel_speed = 0
 	local wheel_count = 0
-	if self._drivetrain == Enums.Drivetrain.FWD then
+	
+	for _, wheel: Wheel in pairs(self.wheels) do
+		local include = false	
 		
-	elseif self._drivetrain == Enums.Drivetrain.RWD then
+		if self._drivetrain == Enums.Drivetrain.FWD then
+			include = wheel.is_front
+		elseif self._drivetrain == Enums.Drivetrain.RWD then
+			include = not wheel.is_front
+		elseif self._drivetrain == Enums.Drivetrain.AWD then
+			include = true
+		end
 		
-	elseif self._drivetrain == Enums.Drivetrain.AWD then
-		
+		if include then
+			total_wheel_speed = wheel:get_wheel_speed()
+			wheel_count += 1
+		end
 	end
 	
-	return total_wheel_speed / wheel_count
+	return total_wheel_speed / wheel_count + 0.001
 end
 
 --- Vehicle.get_real_speed()
 -- Returns the speed of vehicle in studs per second
 -- Z axis faces backward so return the negative (forward speed)
-function Vehicle.get_real_speed(self: Vehicle): number
-	return -self._chassis.CFrame:PointToObjectSpace(self._chassis.AssemblyLinearVelocity).Z
+function Vehicle.get_real_speed(self: Vehicle): Vector3
+	local vehicle_speed = self.chassis.CFrame:PointToObjectSpace(self.chassis.AssemblyLinearVelocity)
+	
+	return Vector3.new(vehicle_speed.X, vehicle_speed.Y, -vehicle_speed.Z)
 end
 
 function Vehicle.is_flipped(self: Vehicle): boolean
-	return self._chassis.Position.Y > (self._chassis.Position + self._chassis.CFrame.UpVector).Y -- Check if this is correct
+	return self.chassis.Position.Y > (self.chassis.Position + self.chassis.CFrame.UpVector).Y -- Check if this is correct
 end
 
 function Vehicle.update(self: Vehicle, input: {throttle: number, steer: number}, dt: number)
@@ -674,12 +777,21 @@ function Vehicle.update(self: Vehicle, input: {throttle: number, steer: number},
 	end
 
 	local engine_rpm, engine_torque = self.engine:update(input.throttle, engine_boost, dt)
-	local gearbox_rpm, gearbox_torque = self.gearbox:update(engine_rpm, engine_torque)
+	local gearbox_rpm, gearbox_torque, tachometer_bar_progress = self.gearbox:update(engine_rpm, engine_torque)
 	local steer = self.steering_column:update(input.steer, dt)
 	
-	for _, wheel in pairs(self.wheels) do
+	for _, wheel: Wheel in pairs(self.wheels) do
 		wheel:update()
 	end
+	
+	if self._downforce_object then
+		self._downforce_object.Force.Y = calculate_downforce(self)
+	end
+	if self._slipstream_object then
+		self._slipstream_object.Force.Z = calculate_slipstream(self)
+	end
+	
+	return self:get_wheel_speed(), gearbox_rpm, tachometer_bar_progress 
 end
 
 function Vehicle.destroy(self: Vehicle): ()
@@ -702,7 +814,7 @@ function Vehicle.destroy(self: Vehicle): ()
 			clear_object(v)
 		end
 		if v == self.wheels then
-			for _, wheel in pairs(self.wheels) do
+			for _, wheel: Wheel in pairs(self.wheels) do
 				clear_object(wheel)
 			end
 		end
