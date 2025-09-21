@@ -8,19 +8,9 @@ export type Drivetrain = {
 	AWD: number,
 }
 
-export type Transmission = {
-	Manual: number,
-	Automatic: number,
-}
-
 export type GearShiftDirection = {
 	Up: number,
 	Down: number,
-}
-
-export type AxleType = {
-	Front: number,
-	Rear: number,
 }
 
 export type TireCompound = {
