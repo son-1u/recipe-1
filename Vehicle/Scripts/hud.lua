@@ -34,7 +34,7 @@ export type HUD = typeof(setmetatable({} :: {
 	destroy: (self: HUD) -> (),
 }, HUD))
 
-function HUD.new(player: Player, gear_shift_event: Signal): HUD
+function HUD.new(player: Player, gear_shift_event: typeof(Signal)): HUD
 	local self = setmetatable({
 		_player = player,
 		_user_interface = hud_ui:Clone()
@@ -69,7 +69,7 @@ function HUD.destroy(self: HUD): ()
 	self._user_interface:Destroy()
 	
 	for k, v in pairs(self) do
-		if getmetatable(v) == Signal then
+		if typeof(v) == "table" and getmetatable(v) == Signal then
 			v:Disconnect()
 		end
 		
