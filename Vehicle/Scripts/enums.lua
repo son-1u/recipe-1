@@ -1,16 +1,9 @@
 -- List of enums for use with Vehicle objects
 
-local Enums = {}
-
 export type Drivetrain = {
 	FWD: number,
 	RWD: number,
 	AWD: number,
-}
-
-export type GearShiftDirection = {
-	Up: number,
-	Down: number,
 }
 
 export type TireCompound = {
@@ -21,33 +14,17 @@ export type TireCompound = {
 	Wet: number,
 }
 
-Enums.Drivetrain = {
-	FWD = 1,
-	RWD = 2,
-	AWD = 3,
+return {
+	Drivetrain = {
+		FWD = 1,
+		RWD = 2,
+		AWD = 3,
+	},
+	TireCompound = {
+		SOFT = 1,
+		MEDIUM = 2,
+		HARD = 3,
+		INTERMEDIATE = 4,
+		WET = 5,
+	},
 }
-
-Enums.Transmission = {
-	Manual = 1,
-	Automatic = 2,
-}
-
-Enums.GearShiftDirection = {
-	Up = 1,
-	Down = -1,
-}
-
-Enums.AxleType = {
-	Front = 1,
-	Rear = 2,
-}
-
-Enums.TireCompound = {
-	Soft = 1,
-	Medium = 2,
-	Hard = 3,
-	Intermediate = 4,
-	Wet = 5,
-}
-
-return Enums
