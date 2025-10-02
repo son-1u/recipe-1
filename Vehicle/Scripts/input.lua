@@ -25,12 +25,12 @@ export type Input = typeof(setmetatable({} :: {
 	_throttle: number,
 	_steer: number,
 	_current_input_type: Enum.UserInputType | nil,
+	_connections: {},
 	
 	throttle_changed: typeof(Signal),
 	steering_changed: typeof(Signal),
 	gear_shift_triggered: typeof(Signal),
 	camera_change_triggered: typeof(Signal),
-	camera_rearview_triggered: typeof(Signal),
 	
 	new: () -> Input,
 	enable: (self: Input) -> (),
@@ -80,18 +80,18 @@ function Input.new(): Input
 		_throttle = 0,
 		_steer = 0,
 		_current_input_type = nil,
+		_connections = table.create(4), -- When you add more mobile connections, add onto this
 		
 		throttle_changed = Signal.new(),
 		steering_changed = Signal.new(),
 		gear_shift_triggered = Signal.new(),
 		camera_change_triggered = Signal.new(),
-		camera_rearview_triggered = Signal.new()
 	}, Input)
 end
 
 local STEERING_DEADZONE = 0.05
-local function measure_analog_movement(input: InputObject): number
-	local position = input.Position.X
+local function measure_analog_movement(input_object: InputObject): number
+	local position = input_object.Position.X
 	if math.abs(position) <= STEERING_DEADZONE then
 		return
 	end
@@ -181,10 +181,12 @@ function Input.enable(self: Input): ()
 	ContextActionService:BindAction(ACTION_NAMES.CAMERA_CHANGE, function(_, input_state, input_object: InputObject)
 		if input_object.KeyCode == config.kb_camera_rearview or input_object.KeyCode == config.gamepad_camera_rearview then
 			if input_state == Enum.UserInputState.Begin then
-				self.camera_rearview_triggered:Fire(true)
-			else
-				self.camera_rearview_triggered:Fire(false)
+				self.camera_change_triggered:Fire(true)
+			elseif input_state == Enum.UserInputState.End then
+				self.camera_change_triggered:Fire(false)
 			end
+			
+			return
 		end
 		
 		if input_object.KeyCode == config.kb_camera_change or input_object.KeyCode == config.gamepad_camera_change then
@@ -214,20 +216,20 @@ function Input.disable(self: Input): ()
 end
 
 function Input.connect_mobile_inputs(self: Input, mobile_ui_object): ()
-	mobile_ui_object.throttle_changed:Connect(function(value: number)
+	table.insert(self._connections, mobile_ui_object.throttle_changed:Connect(function(value: number)
 		self._throttle = value
 		self.throttle_changed:Fire(self._throttle)
-	end)
-	mobile_ui_object.steering_changed:Connect(function(value: number)
+	end))
+	table.insert(self._connections, mobile_ui_object.steering_changed:Connect(function(value: number)
 		self._steer = value
 		self.steering_changed:Fire(self._steer)
-	end)
-	mobile_ui_object.gear_shift_triggered:Connect(function(value: number)
+	end))
+	table.insert(self._connections, mobile_ui_object.gear_shift_triggered:Connect(function(value: number)
 		self.gear_shift_triggered:Fire(value)
-	end)
-	mobile_ui_object.camera_change_triggered:Connect(function()
-		self.camera_change_triggered:Fire()
-	end)
+	end))
+	table.insert(self._connections, mobile_ui_object.camera_change_triggered:Connect(function(rearview: boolean?)
+		self.camera_change_triggered:Fire(rearview)
+	end))
 end
 
 function Input.get_movement_vector(self: Input): (number, number)
@@ -239,10 +241,15 @@ function Input.destroy(self: Input): ()
 		self:disable()
 	end
 	
+	for _, connection in pairs(self._connections) do
+		connection:Disconnect()
+	end
+	
 	for k, v in pairs(self) do
 		if typeof(v) == "table" and getmetatable(v) == Signal then
 			v:DisconnectAll()
 		end
+		
 		self[k] = nil
 	end
 end
