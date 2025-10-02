@@ -5,7 +5,6 @@ Simple camera controller, I might allow for extra features (darkening, shaking, 
 -------------------------------SERVICES-------------------------------
 
 local RunService = game:GetService("RunService")
-local ContextActionService = game:GetService("ContextActionService")
 
 -----------------------------CAMERA CLASS-----------------------------
 
@@ -15,8 +14,9 @@ Camera.__index = Camera
 export type Camera = typeof(setmetatable({} :: {
 	enabled: boolean,
 	_camera: Instance, -- typeof(workspace.CurrentCamera) returned Instance
-	_current_camera_position: Attachment,
-	_camera_positions: {Attachment},
+	_current_camera_position: {_data: Attachment, _next: {}},
+	_camera_positions: {_head: {} | nil},
+	_rearview_camera: {_data: Attachment, _next: {} | nil},
 	
 	new: ({Attachment}) -> Camera,
 	enable: (self: Camera) -> (),
@@ -26,12 +26,36 @@ export type Camera = typeof(setmetatable({} :: {
 	destroy: (self: Camera) -> (),
 }, Camera))
 
-function Camera.new(camera_positions: {Attachment}): Camera
+local function create_circular_singly_linked_list(data: {any}): {}
+	local list = {_head = nil}
+	local prev = nil
+	for _, d in ipairs(data) do
+		local node = {
+			_data = d,
+			_next = nil,
+		}
+
+		if list._head == nil then
+			list._head = node
+		else
+			prev._next = node
+		end
+		
+		prev = node
+		prev._next = list._head
+	end
+	
+	return list
+end
+
+function Camera.new(camera_positions: {Attachment}, rearview_camera): Camera
+	local list = create_circular_singly_linked_list(camera_positions)
 	return setmetatable({
 		enabled = true,
 		_camera = workspace.CurrentCamera,
-		_current_camera_position = nil,
-		_camera_positions = camera_positions
+		_camera_positions = list,
+		_current_camera_position = list._head,
+		_rearview_camera = {_data = rearview_camera, _next = nil},
 	}, Camera)
 end
 
@@ -41,11 +65,9 @@ function Camera.enable(self: Camera): ()
 	end
 	self.enabled = true
 
-	ContextActionService:BindAction("CHANGE_CURRENT_CAMERA", self:change_camera(), false, Enum.KeyCode.V)
+	--ContextActionService:BindAction("CHANGE_CURRENT_CAMERA", self:change_camera(), false, Enum.KeyCode.V)
 
-	RunService:BindToRenderStep("UPDATE_CAMERA", Enum.RenderPriority.Camera, function()
-		self:update()
-	end)
+	RunService:BindToRenderStep("UPDATE_CAMERA", Enum.RenderPriority.Camera, self:update())
 end
 
 function Camera.disable(self: Camera)
@@ -54,22 +76,22 @@ function Camera.disable(self: Camera)
 	end
 	self.enabled = false
 
-	ContextActionService:UnbindAction("CHANGE_CURRENT_CAMERA")
+	--ContextActionService:UnbindAction("CHANGE_CURRENT_CAMERA")
 	RunService:UnbindFromRenderStep("UPDATE_CAMERA")
 end
 
-local index = 1 -- TODO: should change this to be included in the camera object? (not floating around in the file)
-function Camera.change_camera(self: Camera, rearview_flag: boolean?): ()
-	
-	index += 1
-	if index > #self._camera_positions then -- I would prefer to use a linked list but oh well
-		index = 1
+function Camera.change_camera(self: Camera, rearview: boolean?): ()
+	if rearview then
+		self._rearview_camera._next = self._current_camera_position
+		self._current_camera_position = self._rearview_camera
+		return
 	end
-	self._current_camera_position = self._camera_positions[index]
+	
+	self._current_camera_position = self._current_camera_position._next
 end
 
 function Camera.update(self: Camera): ()
-	self._camera.CFrame = self._current_camera_position.WorldCFrame
+	self._camera.CFrame = self._current_camera_position._data.WorldCFrame
 end
 
 function Camera.destroy(self: Camera): ()
