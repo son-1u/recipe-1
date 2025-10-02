@@ -12,8 +12,11 @@ local GuiService = game:GetService("GuiService")
 --------------------------------IMPORTS-------------------------------
 
 local Signal = require(script.Parent.Parent.utils.Signal)
-
 local config = require(script.Parent.Parent.utils.config).keybinds -- In the future, if we want to allow custom keybinds, move this down to the input class or whatever
+
+--------------------------------EVENTS--------------------------------
+
+local keybind_changed = game:GetService("ReplicatedStorage").:WaitForChild("client).events.keybind_changed
 
 ------------------------------INPUT CLASS-----------------------------
 
@@ -74,19 +77,24 @@ local SHIFT_MAP = {
 	[config.gamepad_shift_down] = -1
 }
 
-function Input.new(): Input
-	return setmetatable({
+function Input.new(config: {}): Input
+	local self = setmetatable({
 		enabled = false,
-		_throttle = 0,
-		_steer = 0,
 		_current_input_type = nil,
 		_connections = table.create(4), -- When you add more mobile connections, add onto this
+		_keybinds = config
+		_throttle = 0,
+		_steer = 0,
 		
 		throttle_changed = Signal.new(),
 		steering_changed = Signal.new(),
 		gear_shift_triggered = Signal.new(),
 		camera_change_triggered = Signal.new(),
 	}, Input)
+
+	keybind_changed.Event:Connect(function(keybind: Enum.Keybind, key_code: Enum) -- ENUM TYPE
+		self._keybinds[keybind] = key_code
+	end) -- TODO: UPDATE ALL THE CONTEXTACTIONSERVICE FUNCTIONS TO ACCEPT THE NEW KEYBIND
 end
 
 local STEERING_DEADZONE = 0.05
@@ -123,16 +131,16 @@ function Input.enable(self: Input): ()
 		end
 		self.throttle_changed:Fire(self._throttle)
 	end, false,
-		config.kb_throttle,
-		config.kb_throttle_alt,
-		config.kb_brake,
-		config.kb_brake_alt,
-		config.gamepad_throttle,
-		config.gamepad_brake
+		self._keybinds.kb_throttle,
+		self._keybinds.kb_throttle_alt,
+		self._keybinds.kb_brake,
+		self._keybinds.kb_brake_alt,
+		self._keybinds.gamepad_throttle,
+		self._keybinds.gamepad_brake
 	)
 	
 	ContextActionService:BindAction(ACTION_NAMES.STEER, function(_, input_state, input_object: InputObject)
-		if input_object.KeyCode == config.mouse_steer or input_object.KeyCode == config.gamepad_steer then
+		if input_object.KeyCode == self._keybinds.mouse_steer or input_object.KeyCode == self._keybinds.gamepad_steer then
 			if input_state ~= Enum.UserInputState.Change then
 				return
 			end
@@ -155,13 +163,13 @@ function Input.enable(self: Input): ()
 		end
 		self.steering_changed:Fire(self._steer)
 	end, false,
-		config.kb_steer_left,
-		config.kb_steer_left_alt,
-		config.kb_steer_right,
-		config.kb_steer_right_alt,
-		config.gamepad_steer,
-		config.gamepad_button_steer_left,
-		config.gamepad_button_steer_right
+		self._keybinds.kb_steer_left,
+		self._keybinds.kb_steer_left_alt,
+		self._keybinds.kb_steer_right,
+		self._keybinds.kb_steer_right_alt,
+		self._keybinds.gamepad_steer,
+		self._keybinds.gamepad_button_steer_left,
+		self._keybinds.gamepad_button_steer_right
 	)
 	
 	ContextActionService:BindAction(ACTION_NAMES.SHIFT, function(_, input_state, input_object: InputObject)
@@ -172,14 +180,14 @@ function Input.enable(self: Input): ()
 		
 		self.gear_shift_triggered:Fire(value)
 	end, false,
-		config.kb_shift_up,
-		config.kb_shift_down,
-		config.gamepad_shift_up,
-		config.gamepad_shift_down
+		self._keybinds.kb_shift_up,
+		self._keybinds.kb_shift_down,
+		self._keybinds.gamepad_shift_up,
+		self._keybinds.gamepad_shift_down
 	)
 	
 	ContextActionService:BindAction(ACTION_NAMES.CAMERA_CHANGE, function(_, input_state, input_object: InputObject)
-		if input_object.KeyCode == config.kb_camera_rearview or input_object.KeyCode == config.gamepad_camera_rearview then
+		if input_object.KeyCode == self._keybinds.kb_camera_rearview or input_object.KeyCode == self._keybinds.gamepad_camera_rearview then
 			if input_state == Enum.UserInputState.Begin then
 				self.camera_change_triggered:Fire(true)
 			elseif input_state == Enum.UserInputState.End then
@@ -189,14 +197,14 @@ function Input.enable(self: Input): ()
 			return
 		end
 		
-		if input_object.KeyCode == config.kb_camera_change or input_object.KeyCode == config.gamepad_camera_change then
+		if input_object.KeyCode == self._keybinds.kb_camera_change or input_object.KeyCode == self._keybinds.gamepad_camera_change then
 			self.camera_change_triggered:Fire()
 		end
 	end, false,
-		config.kb_camera_change,
-		config.kb_camera_rearview,
-		config.gamepad_camera_change,
-		config.gamepad.camera_rearview
+		self._keybinds.kb_camera_change,
+		self._keybinds.kb_camera_rearview,
+		self._keybinds.gamepad_camera_change,
+		self._keybinds.gamepad.camera_rearview
 	)
 	GuiService.TouchControlsEnabled = false
 end
