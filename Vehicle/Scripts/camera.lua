@@ -14,9 +14,9 @@ Camera.__index = Camera
 export type Camera = typeof(setmetatable({} :: {
 	enabled: boolean,
 	_camera: Instance, -- typeof(workspace.CurrentCamera) returned Instance
-	_current_camera_position: {_data: Attachment, _next: {}},
-	_camera_positions: {_head: {} | nil},
-	_rearview_camera: {_data: Attachment, _next: {} | nil},
+	_current_camera_position: Node,
+	_camera_positions: {_head: Node},
+	_rearview_camera: Node,
 	
 	new: ({Attachment}) -> Camera,
 	enable: (self: Camera) -> (),
@@ -26,14 +26,26 @@ export type Camera = typeof(setmetatable({} :: {
 	destroy: (self: Camera) -> (),
 }, Camera))
 
+type Node = typeof(setmetatable({} :: {
+	_data: any,
+	_next: Node | nil,
+}, Node))
+
+local Node = {}
+Node.__index = Node
+
+function Node.new(data: any): Node
+	return setmetatable({
+		_data = data,
+		_next = nil,
+	}, Node)
+end
+
 local function create_circular_singly_linked_list(data: {any}): {}
 	local list = {_head = nil}
 	local prev = nil
 	for _, d in ipairs(data) do
-		local node = {
-			_data = d,
-			_next = nil,
-		}
+		local node = Node.new(d)
 
 		if list._head == nil then
 			list._head = node
@@ -55,7 +67,7 @@ function Camera.new(camera_positions: {Attachment}, rearview_camera): Camera
 		_camera = workspace.CurrentCamera,
 		_camera_positions = list,
 		_current_camera_position = list._head,
-		_rearview_camera = {_data = rearview_camera, _next = nil},
+		_rearview_camera = Node.new(rearview_camera), -- Separate it from the main list as a separate node
 	}, Camera)
 end
 
@@ -64,10 +76,11 @@ function Camera.enable(self: Camera): ()
 		return
 	end
 	self.enabled = true
-
 	--ContextActionService:BindAction("CHANGE_CURRENT_CAMERA", self:change_camera(), false, Enum.KeyCode.V)
 
-	RunService:BindToRenderStep("UPDATE_CAMERA", Enum.RenderPriority.Camera, self:update())
+	RunService:BindToRenderStep("UPDATE_CAMERA", Enum.RenderPriority.Camera.Value - 1, function(dt: number)
+		
+	end)
 end
 
 function Camera.disable(self: Camera)
