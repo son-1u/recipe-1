@@ -13,16 +13,17 @@ Camera.__index = Camera
 
 export type Camera = typeof(setmetatable({} :: {
 	enabled: boolean,
-	_camera: Instance, -- typeof(workspace.CurrentCamera) returned Instance
+	_camera: Camera,
 	_current_camera_position: Node,
 	_camera_positions: {_head: Node},
 	_rearview_camera: Node,
+	_get_movement_data: () -> {number},
 	
-	new: ({Attachment}) -> Camera,
+	new: (camera_positions: {Attachment}, rearview_camera: Attachment?, get_movement_data: () -> Vector3) -> Camera,
 	enable: (self: Camera) -> (),
 	disable: (self: Camera) -> (),
 	change_camera: (self: Camera, rearview_flag: boolean?) -> (),
-	update: (self: Camera) -> (),
+	update: (self: Camera, dt: number) -> (),
 	destroy: (self: Camera) -> (),
 }, Camera))
 
@@ -41,7 +42,7 @@ function Node.new(data: any): Node
 	}, Node)
 end
 
-local function create_circular_singly_linked_list(data: {any}): {}
+local function create_circular_singly_linked_list(data: {any}): {_head: Node}
 	local list = {_head = nil}
 	local prev = nil
 	for _, d in ipairs(data) do
@@ -54,20 +55,26 @@ local function create_circular_singly_linked_list(data: {any}): {}
 		end
 		
 		prev = node
-		prev._next = list._head
 	end
+	prev._next = list._head
 	
 	return list
 end
 
-function Camera.new(camera_positions: {Attachment}, rearview_camera): Camera
+function Camera.new(camera_positions: {Attachment}, rearview_camera: Attachment?, get_movement_data: () -> Vector3, camera_settings: {[Enum]: any}): Camera
 	local list = create_circular_singly_linked_list(camera_positions)
 	return setmetatable({
-		enabled = true,
+		enabled = false,
 		_camera = workspace.CurrentCamera,
 		_camera_positions = list,
 		_current_camera_position = list._head,
-		_rearview_camera = Node.new(rearview_camera), -- Separate it from the main list as a separate node
+		_rearview_camera = rearview_camera and Node.new(rearview_camera) or nil, -- Separate it from the main list as a separate node
+		_get_movement_data = get_movement_data or function()
+			return Vector3.zero
+		end,
+		_camera_x_shake_multiplier = camera_settings,
+		_camera_y_shake_multiplier = camera_settings,
+		_camera_z_shake_multiplier = camera_settings,
 	}, Camera)
 end
 
@@ -76,10 +83,9 @@ function Camera.enable(self: Camera): ()
 		return
 	end
 	self.enabled = true
-	--ContextActionService:BindAction("CHANGE_CURRENT_CAMERA", self:change_camera(), false, Enum.KeyCode.V)
 
 	RunService:BindToRenderStep("UPDATE_CAMERA", Enum.RenderPriority.Camera.Value - 1, function(dt: number)
-		
+		self:update(dt)
 	end)
 end
 
@@ -89,12 +95,11 @@ function Camera.disable(self: Camera)
 	end
 	self.enabled = false
 
-	--ContextActionService:UnbindAction("CHANGE_CURRENT_CAMERA")
 	RunService:UnbindFromRenderStep("UPDATE_CAMERA")
 end
 
 function Camera.change_camera(self: Camera, rearview: boolean?): ()
-	if rearview then
+	if rearview and self._rearview_camera then
 		self._rearview_camera._next = self._current_camera_position
 		self._current_camera_position = self._rearview_camera
 		return
@@ -103,8 +108,13 @@ function Camera.change_camera(self: Camera, rearview: boolean?): ()
 	self._current_camera_position = self._current_camera_position._next
 end
 
-function Camera.update(self: Camera): ()
-	self._camera.CFrame = self._current_camera_position._data.WorldCFrame
+function Camera.update(self: Camera, dt: number): ()
+	local position: CFrame = self._current_camera_position._data.WorldCFrame
+	local movement_data: Vector3 = self._get_movement_data()
+	
+	position.Position += Vector3.new(movement_data.X *)
+	
+	self._camera.CFrame = 1
 end
 
 function Camera.destroy(self: Camera): ()
@@ -116,5 +126,14 @@ function Camera.destroy(self: Camera): ()
 		self[k] = nil
 	end
 end
+
+setmetatable(Camera, {
+	__index = function(tbl, key)
+		error(`Attempt to get {tbl}.{key} (not a valid member)`, 2)
+	end,
+	__newindex = function(tbl, key, value)
+		error(`Attempt to set {tbl}.{key} (not a valid operation)`, 2)
+	end,
+})
 
 return Camera
