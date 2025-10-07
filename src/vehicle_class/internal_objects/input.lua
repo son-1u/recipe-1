@@ -12,11 +12,6 @@ local GuiService = game:GetService("GuiService")
 --------------------------------IMPORTS-------------------------------
 
 local Signal = require(script.Parent.Parent.utils.Signal)
-local config = require(script.Parent.Parent.utils.config).keybinds -- In the future, if we want to allow custom keybinds, move this down to the input class or whatever
-
---------------------------------EVENTS--------------------------------
-
-local keybind_changed = game:GetService("ReplicatedStorage").:WaitForChild("client).events.keybind_changed
 
 ------------------------------INPUT CLASS-----------------------------
 
@@ -29,6 +24,7 @@ export type Input = typeof(setmetatable({} :: {
 	_steer: number,
 	_current_input_type: Enum.UserInputType | nil,
 	_connections: {},
+	_keybinds: {[string]: Enum.KeyCode},
 	
 	throttle_changed: typeof(Signal),
 	steering_changed: typeof(Signal),
@@ -52,49 +48,51 @@ local ACTION_NAMES = {
 	CAMERA_CHANGE = "CAMERA_CHANGE",
 }
 
-local THROTTLE_MAP = {
-	[config.kb_throttle] = 1,
-	[config.kb_throttle_alt] = 1,
-	[config.gamepad_throttle] = 1,
-	[config.kb_brake] = -1,
-	[config.kb_brake_alt] = -1,
-	[config.gamepad_brake] = -1,
-}
+local THROTTLE_MAP = {}
+local STEER_MAP = {}
+local SHIFT_MAP = {}
 
-local STEER_MAP = {
-	[config.kb_steer_right] = 1,
-	[config.kb_steer_right_alt] = 1,
-	[config.kb_steer_left] = -1,
-	[config.kb_steer_left_alt] = -1,
-	[config.gamepad_button_steer_right] = 1,
-	[config.gamepad_button_steer_left] = -1
-}
-
-local SHIFT_MAP = {
-	[config.kb_shift_up] = 1,
-	[config.gamepad_shift_up] = 1,
-	[config.kb_shift_down] = -1,
-	[config.gamepad_shift_down] = -1
-}
-
-function Input.new(config: {}): Input
+function Input.new(input_settings: {[string]: Enum.KeyCode}): Input
 	local self = setmetatable({
 		enabled = false,
-		_current_input_type = nil,
-		_connections = table.create(4), -- When you add more mobile connections, add onto this
-		_keybinds = config
 		_throttle = 0,
 		_steer = 0,
+		_current_input_type = nil,
+		_connections = table.create(4), -- When you add more mobile connections, add onto this
+		_keybinds = input_settings,
 		
 		throttle_changed = Signal.new(),
 		steering_changed = Signal.new(),
 		gear_shift_triggered = Signal.new(),
 		camera_change_triggered = Signal.new(),
 	}, Input)
-
-	keybind_changed.Event:Connect(function(keybind: Enum.Keybind, key_code: Enum) -- ENUM TYPE
-		self._keybinds[keybind] = key_code
-	end) -- TODO: UPDATE ALL THE CONTEXTACTIONSERVICE FUNCTIONS TO ACCEPT THE NEW KEYBIND
+	
+	THROTTLE_MAP = {
+		[self._keybinds.kb_throttle] = 1,
+		[self._keybinds.kb_throttle_alt] = 1,
+		[self._keybinds.gamepad_throttle] = 1,
+		[self._keybinds.kb_brake] = -1,
+		[self._keybinds.kb_brake_alt] = -1,
+		[self._keybinds.gamepad_brake] = -1,
+	}
+	
+	STEER_MAP = {
+		[self._keybinds.kb_steer_right] = 1,
+		[self._keybinds.kb_steer_right_alt] = 1,
+		[self._keybinds.kb_steer_left] = -1,
+		[self._keybinds.kb_steer_left_alt] = -1,
+		[self._keybinds.gamepad_button_steer_right] = 1,
+		[self._keybinds.gamepad_button_steer_left] = -1,
+	}
+	
+	SHIFT_MAP = {
+		[self._keybinds.kb_shift_up] = 1,
+		[self._keybinds.gamepad_shift_up] = 1,
+		[self._keybinds.kb_shift_down] = -1,
+		[self._keybinds.gamepad_shift_down] = -1,
+	}
+	
+	return self
 end
 
 local STEERING_DEADZONE = 0.05
@@ -147,7 +145,6 @@ function Input.enable(self: Input): ()
 
 			self._steer = measure_analog_movement(input_object)
 			self.steering_changed:Fire(self._steer)
-
 			return
 		end
 		
@@ -244,6 +241,10 @@ function Input.get_movement_vector(self: Input): (number, number)
 	return self._throttle, self._steer
 end
 
+function Input.keybind_changed(self: Input, keybind: string, key_code: Enum.KeyCode): ()
+	self._keybinds[keybind] = key_code
+end
+
 function Input.destroy(self: Input): ()
 	if self.enabled then
 		self:disable()
@@ -261,5 +262,14 @@ function Input.destroy(self: Input): ()
 		self[k] = nil
 	end
 end
+
+setmetatable(Input, {
+	__index = function(tbl, key)
+		error(`Attempt to get {tbl}.{key} (not a valid member)`, 2)
+	end,
+	__newindex = function(tbl, key, value)
+		error(`Attempt to set {tbl}.{key} (not a valid operation)`, 2)
+	end,
+})
 
 return Input
