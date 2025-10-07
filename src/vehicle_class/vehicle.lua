@@ -42,11 +42,11 @@ type BaseComponent = typeof(setmetatable({} :: {
 }, BaseComponent))
 
 function BaseComponent.new(vehicle: Vehicle, component_properties: {}): BaseComponent
-	local self = {
+	local self = setmetatable({
 		_vehicle = vehicle,
 		_health = 100,
 		health_changed = Signal.new(),
-	}
+	}, BaseComponent)
 	
 	for k, v in pairs(component_properties) do
 		self[k] = v
@@ -72,6 +72,15 @@ function BaseComponent.destroy(self: BaseComponent): ()
 		self[k] = nil
 	end
 end
+
+setmetatable(BaseComponent, {
+	__index = function(tbl, key)
+		error(`Attempt to get {tbl}.{key} (not a valid member)`, 2)
+	end,
+	__newindex = function(tbl, key, value)
+		error(`Attempt to set {tbl}.{key} (not a valid operation)`, 2)
+	end,
+})
 
 -----------------------------ENGINE CLASS-----------------------------
 
@@ -197,6 +206,15 @@ function Engine.update(self: Engine, throttle: number, turbocharger_boost: numbe
 	return self._rpm, self._torque
 end
 
+setmetatable(Engine, {
+	__index = function(tbl, key)
+		error(`Attempt to get {tbl}.{key} (not a valid member)`, 2)
+	end,
+	__newindex = function(tbl, key, value)
+		error(`Attempt to set {tbl}.{key} (not a valid operation)`, 2)
+	end,
+})
+
 -------------------------ELECTRIC MOTOR CLASS-------------------------
 
 local ElectricMotor = setmetatable({}, BaseComponent)
@@ -271,6 +289,15 @@ function ElectricMotor.update(self: ElectricMotor, throttle: number, dt: number)
 	return self._rpm, self._torque
 end
 
+setmetatable(ElectricMotor, {
+	__index = function(tbl, key)
+		error(`Attempt to get {tbl}.{key} (not a valid member)`, 2)
+	end,
+	__newindex = function(tbl, key, value)
+		error(`Attempt to set {tbl}.{key} (not a valid operation)`, 2)
+	end,
+})
+
 --------------------------TURBOCHARGER CLASS--------------------------
 
 local Turbocharger = setmetatable({}, BaseComponent)
@@ -330,6 +357,15 @@ function Turbocharger.update(self: Turbocharger, engine_rpm: number, throttle: n
 	
 	return math.clamp(self._boost, 0, self._max_boost)
 end
+
+setmetatable(Turbocharger, {
+	__index = function(tbl, key)
+		error(`Attempt to get {tbl}.{key} (not a valid member)`, 2)
+	end,
+	__newindex = function(tbl, key, value)
+		error(`Attempt to set {tbl}.{key} (not a valid operation)`, 2)
+	end,
+})
 
 -----------------------------GEARBOX CLASS----------------------------
 
@@ -396,6 +432,15 @@ function Gearbox.update(self: Gearbox, engine_rpm: number, engine_torque: number
 	return gearbox_rpm, gearbox_torque
 end
 
+setmetatable(Gearbox, {
+	__index = function(tbl, key)
+		error(`Attempt to get {tbl}.{key} (not a valid member)`, 2)
+	end,
+	__newindex = function(tbl, key, value)
+		error(`Attempt to set {tbl}.{key} (not a valid operation)`, 2)
+	end,
+})
+
 ------------------------------AXLE CLASS------------------------------
 
 local Axle = setmetatable({}, BaseComponent)
@@ -438,6 +483,15 @@ function Axle.new(vehicle: Vehicle, connected_wheels: {Wheel}): Axle
 	return self
 end
 
+setmetatable(Axle, {
+	__index = function(tbl, key)
+		error(`Attempt to get {tbl}.{key} (not a valid member)`, 2)
+	end,
+	__newindex = function(tbl, key, value)
+		error(`Attempt to set {tbl}.{key} (not a valid operation)`, 2)
+	end,
+})
+
 ------------------------STEERING COLUMN CLASS-------------------------
 
 local SteeringColumn = setmetatable({}, BaseComponent)
@@ -469,6 +523,15 @@ function SteeringColumn.update(self: SteeringColumn, steer_float: number, dt: nu
 	self._steering_angle = lerp(self._steering_angle, target_angle, self._steering_speed * dt)
 	return self._steering_angle
 end
+
+setmetatable(SteeringColumn, {
+	__index = function(tbl, key)
+		error(`Attempt to get {tbl}.{key} (not a valid member)`, 2)
+	end,
+	__newindex = function(tbl, key, value)
+		error(`Attempt to set {tbl}.{key} (not a valid operation)`, 2)
+	end,
+})
 
 -----------------------------WHEEL CLASS------------------------------
 
@@ -616,6 +679,15 @@ function Wheel.update(self: Wheel, dt: number): ()
 	self.health_changed:Fire(self._health)
 end
 
+setmetatable(Wheel, {
+	__index = function(tbl, key)
+		error(`Attempt to get {tbl}.{key} (not a valid member)`, 2)
+	end,
+	__newindex = function(tbl, key, value)
+		error(`Attempt to set {tbl}.{key} (not a valid operation)`, 2)
+	end,
+})
+
 ------------------------------MAIN CLASS------------------------------
 
 local Vehicle = {}
@@ -648,9 +720,10 @@ export type Vehicle = typeof(setmetatable({} :: {
 	_slipstream_decay_rate: number,
 	_slipstream_decay_midpoint: number,
 	
+	_connections: {},
+	
 	_input_object: Input.Input,
 	_camera_object: Camera.Camera,
-	
 	_objects_binded: boolean,
 
 	new: (prefab: Model, spawn_position: CFrame, config: {}) -> Vehicle,
@@ -675,8 +748,9 @@ function Vehicle.new(prefab: Model, spawn_position: CFrame, config: {}): Vehicle
 		_downforce_coefficient = config.downforce_coefficient or nil,
 		_downforce_percentage = config.downforce_percentage or nil,
 		
-		_input_object = Input.new(),
+		_connections = {},
 		
+		_input_object = Input.new(),
 		_objects_binded = false
 	}, Vehicle)
 	
@@ -684,7 +758,7 @@ function Vehicle.new(prefab: Model, spawn_position: CFrame, config: {}): Vehicle
 	self._downforce_object = self.model.constraints.forces:FindFirstChild("downforce") or nil
 	self._slipstream_object = self.model.constraints.forces:FindFirstChild("slipstream") or nil
 	
-	self.wheels = {__name = "wheels"}
+	self.wheels = {}
 	for _, wheel_part in pairs(self.model.chassis.wheels:GetChildren()) do
 		self.wheels[wheel_part.Name] = Wheel.new(self, wheel_part, config.wheels)
 	end
@@ -708,25 +782,27 @@ function Vehicle.new(prefab: Model, spawn_position: CFrame, config: {}): Vehicle
 		has_steering_column = false,
 		has_wheels = false,
 	}
+	for _, wheel: Wheel in pairs(self.wheels) do
+		if getmetatable(wheel) ~= Wheel then
+			continue
+		end
+
+		checks.has_wheels = true
+		break
+	end
 	for k, v in pairs(self) do
 		if typeof(v) ~= "table" then
 			return
-		end
-		if v.__name == "wheels" then
-			for _, wheel: Wheel in pairs(self.wheels) do
-				if getmetatable(wheel) ~= Wheel then
-					continue
-				end
-				
-				checks.has_wheels = true
-				break
-			end
 		end
 		
 		local metatable = getmetatable(v)
 		if not metatable then
 			return
 		end
+		if metatable == Wheel then
+			return
+		end
+		
 		if metatable == Engine or metatable == ElectricMotor then
 			checks.has_powertrain = true
 		elseif metatable == Gearbox then
@@ -738,7 +814,7 @@ function Vehicle.new(prefab: Model, spawn_position: CFrame, config: {}): Vehicle
 	
 	for check, boolean in pairs(checks) do
 		if boolean == false then
-			self:destroy() -- I'm not entirely sure if its needed, but since some internal components have "signals", this just ensures everything is cleared up
+			self:destroy()
 			error("Vehicle failed operational check: {check}")
 		end
 	end
@@ -795,21 +871,18 @@ function Vehicle.bind_objects(self: Vehicle): boolean
 		end
 	end)
 	
-	self._input_object.throttle_changed:Connect(function(value: number)
+	table.insert(self._connections, self._input_object.throttle_changed:Connect(function(value: number)
 		self._throttle = value
-	end)
-	self._input_object.steering_changed:Connect(function(value: number)
+	end))
+	table.insert(self._connections, self._input_object.steering_changed:Connect(function(value: number)
 		self._steering = value
-	end)
-	self._input_object.gear_shift_changed:Connect(function(value: number)
+	end))
+	table.insert(self._connections, self._input_object.gear_shift_triggered:Connect(function(value: number)
 		self.gearbox:shift(value)
-	end)
-	self._input_object.camera_mode_changed:Connect(function()
-		self._camera_object:change_camera()
-	end)
-	self._input_object.camera_rearview_triggered:Connect(function()
-		
-	end)
+	end))
+	table.insert(self._connections, self._input_object.camera_change_triggered:Connect(function(rearview: boolean?)
+		self._camera_object:change_camera(rearview)
+	end))
 	
 	return true
 end
@@ -914,9 +987,12 @@ function Vehicle.destroy(self: Vehicle): ()
 		occupant.Parent:FindFirstChild("Humanoid").Jump = true
 	end
 	
-	local function clear_object(object: {}): ()
-		if object.destroy() then
-			object:destroy()
+	for _, connection in pairs(self._connections) do
+		connection:Disconnect()
+	end
+	for _, wheel: Wheel in pairs(self.wheels) do
+		if wheel.destroy() then
+			wheel:destroy()
 		end
 	end
 	
@@ -925,16 +1001,29 @@ function Vehicle.destroy(self: Vehicle): ()
 			v:Destroy()
 		end
 		if typeof(v) == "table" then
-			clear_object(v)
-		end
-		if v.__name == "wheels" then
-			for _, wheel: Wheel in pairs(self.wheels) do
-				clear_object(wheel)
+			if getmetatable(v) == nil then
+				return
+			end
+			
+			if v.destroy() then
+				v:destroy()
 			end
 		end
+		
 		
 		self[k] = nil
 	end
 end
+
+setmetatable(Vehicle, {
+	__index = function(tbl, key)
+		error(`Attempt to get {tbl}.{key} (not a valid member)`, 2)
+	end,
+	__newindex = function(tbl, key, value)
+		error(`Attempt to set {tbl}.{key} (not a valid operation)`, 2)
+	end,
+})
+
+-- listen for model.Destroying event?
 
 return Vehicle
