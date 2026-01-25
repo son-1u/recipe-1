@@ -27,13 +27,13 @@ export type Camera = typeof(setmetatable({} :: {
 	destroy: (self: Camera) -> (),
 }, Camera))
 
+local Node = {}
+Node.__index = Node
+
 type Node = typeof(setmetatable({} :: {
 	_data: any,
 	_next: Node | nil,
 }, Node))
-
-local Node = {}
-Node.__index = Node
 
 function Node.new(data: any): Node
 	return setmetatable({
@@ -61,13 +61,16 @@ local function create_circular_singly_linked_list(data: {any}): {_head: Node}
 	return list
 end
 
-function Camera.new(camera_positions: {Attachment}, rearview_camera: Attachment?, get_movement_data: () -> Vector3, camera_settings: {[Enum]: any}): Camera
-	local list = create_circular_singly_linked_list(camera_positions)
+function Camera.new(camera_positions: {Attachment}?, rearview_camera: Attachment?, get_movement_data: () -> Vector3, camera_settings: {[Enum]: any}): Camera
+	local list
+	if camera_positions ~= nil then
+		list = create_circular_singly_linked_list(camera_positions)
+	end
 	return setmetatable({
 		enabled = false,
 		_camera = workspace.CurrentCamera,
 		_camera_positions = list,
-		_current_camera_position = list._head,
+		_current_camera_position = list._head, -- Possibly implement support for no camera modes?
 		_rearview_camera = rearview_camera and Node.new(rearview_camera) or nil, -- Separate it from the main list as a separate node
 		_get_movement_data = get_movement_data or function()
 			return Vector3.zero
@@ -112,9 +115,9 @@ function Camera.update(self: Camera, dt: number): ()
 	local position: CFrame = self._current_camera_position._data.WorldCFrame
 	local movement_data: Vector3 = self._get_movement_data()
 	
-	position.Position += Vector3.new(movement_data.X *)
+	--position.Position += Vector3.new(movement_data.X *)
 	
-	self._camera.CFrame = 1
+	self._camera.CFrame = position
 end
 
 function Camera.destroy(self: Camera): ()
